@@ -363,54 +363,57 @@ class MNISTDataModule(pl.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=self.batch_size,num_workers=num_workers)
 
 class CelebDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size=64):
+    def __init__(self, batch_size=64,num_workers=63):
         super().__init__()
         self.batch_size = batch_size
+        self.num_workers = num_workers
         
-    def split_dataset(self,dataset, split_ratio=0.2):
+    def split_dataset(self, dataset, split_ratio=0.2):
         """
-        将数据集划分为训练集和验证集。
+        Divides the dataset into training and validation sets.
 
-        参数:
-        - dataset (datasets.Dataset): 要划分的数据集
-        - split_ratio (float): 验证集所占比例，默认为 0.2
+        Args:
+        - dataset (datasets.Dataset): The dataset to be divided
+        - split_ratio (float): The proportion of the validation set, default is 0.2
 
-        返回:
-        - train_dataset (datasets.Dataset): 划分后的训练集
-        - val_dataset (datasets.Dataset): 划分后的验证集
+        Returns:
+        - train_dataset (datasets.Dataset): The divided training set
+        - val_dataset (datasets.Dataset): The divided validation set
         """
-        # 计算验证集的样本数量
         num_val_samples = int(len(dataset) * split_ratio)
 
-        # 划分数据集
         val_dataset = dataset.shuffle(seed=42).select(range(num_val_samples))
         train_dataset = dataset.shuffle(seed=42).select(range(num_val_samples, len(dataset)))
 
         return train_dataset, val_dataset
+
     def prepare_data(self):
         self.dataset = load_dataset('nielsr/CelebA-faces')
 
-
-
-    def setup(self, stage=None,transform=None):
-        # This method is called on every GPU in the distributed setup and should split the data
+    def setup(self, stage=None, transform=None):
         if stage == 'fit' or stage is None:
             self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
-            # 打印训练集和验证集大小
-            # print(f"训练集大小: {len(self.train_dataset)} {type(self.train_dataset)}")
-            # print(f"验证集大小: {len(self.val_dataset)}")
-            # print(self.dataset)
-            # print( self.train_dataset[0])
-            # def preprocess(batch):
-                # print(type(batch))
-                # batch {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=178x218 at 0x7F421C6FBD30>}
-                # batch = batch['image']
-                # transformed_batch = torch.stack([transform(example) for example in batch]) 
-                # print(transformed_batch.shape)
-                # return transformed_batch,None
-            # self.train_dataset = self.train_dataset.with_transform(preprocess)
-            # self.val_dataset = self.val_dataset.with_transform(preprocess)
- 
+
+    @staticmethod
+    def collate_fn(batch):
+        # for example in batch:
+        #     image = example['image']
+        #     image.save("/home/haoyu/research/simplemodels/cache/test.jpg")
+        transform = transforms.Compose([
+            transforms.Resize((64, 64)),  # Resize images to (128, 128)
+            transforms.ToTensor(),           # Convert images to tensors
+            # transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
+            transforms.Lambda(lambda x: (x - 0.5) * 2)
+        ])
+        transformed_batch = torch.stack([transform(example['image']) for example in batch])
+        # print("transformerd",transformed_batch.mean(),transformed_batch.min(),transformed_batch.max())
+        return transformed_batch,None
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, collate_fn=self.collate_fn, shuffle=True, num_workers=self.num_workers)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, collate_fn=self.collate_fn, num_workers=self.num_workers)
 
 ### DDIM scheduler
 class DDPM(nn.Module):
@@ -437,28 +440,45 @@ class DDPM(nn.Module):
         
         
     def sampling_backward(self, image_or_shape,net,device="cuda",simple_var=True):
+
         if isinstance(image_or_shape,torch.Tensor):
             x = image_or_shape
         else:
             x = torch.randn(image_or_shape,device=device)
+        # debug 
+        
+        # print(x.max(),x.min(),x.mean())
+        # for t in range(self.N-1,-1,-1):
+        #     self.sampling_step(net, x, t, simple_var)
+        # exit()
         for t in range(self.N-1,-1,-1):
             x = self.sampling_step(net, x, t, simple_var)
         return x
         
-    def sampling_step(self,net,x_t, t,simple_var):
+    def sampling_step(self,net,x_t, t,simple_var,use_noise=True):
         bs = x_t.shape[0]
         t_tensor = t*torch.ones(bs,dtype=torch.long,device=x_t.device).reshape(-1,1)
         if t== 0:
             noise = 0 
-        if simple_var:
-            var = self.betas[t]
         else:
-            var = self.betas[t] * self.alpha_bars[t] * (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t-1])
-        
-        noise = torch.rand_like(x_t) * torch.sqrt(var)
+            if simple_var:
+                var = self.betas[t]
+            else:
+                var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t])*self.betas[t] 
+            #这个地方还真写错了 
+            noise = torch.rand_like(x_t) * torch.sqrt(var)
         eps = net(x_t,t_tensor)
-        mean = (x_t -(1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t]) *eps) / torch.sqrt(self.alphas[t])
-        x_t_prev = mean + noise
+        print(eps.mean(),eps.max(),eps.min())
+        eps = (1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t]) *eps 
+        mean = (x_t - eps) 
+        mean/= torch.sqrt(self.alphas[t])
+        if use_noise:
+            x_t_prev = mean + noise
+        else:
+            x_t_prev = mean
+        # print("noise",self.betas[t],noise.mean(),noise.max(),noise.min())
+        # print("t",t_tensor[0],"eps:",eps.max(),eps.min(),eps.mean())
+        # print(t_tensor)
         return x_t_prev
 
 class DDIM(DDPM):
@@ -479,7 +499,8 @@ class LightningImageDenoiser(pl.LightningModule):
                  N=1000,
                  imsize=32,
                  num_workers=63,
-                 channels = 1
+                 channels = 1,
+                 scheduler = "CosineAnnealingLR",
                  ):
         super(LightningImageDenoiser, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
@@ -491,23 +512,8 @@ class LightningImageDenoiser(pl.LightningModule):
         self.lr = lr 
         self.batch_size = batch_size
         self.num_workers = num_workers
-        # prepare dataset
-        self.transform = transforms.Compose([
-            # transforms.RandomCrop(size=(28, 28)),
-            transforms.Resize((imsize, imsize)),  # Resize images to (128, 128)
-            transforms.ToTensor(),           # Convert images to tensors
-            transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
-        ])
-        # dataset = "mnist"
-        dataset = "celeba"
-        if dataset =="celeba":
-            data_module = CelebDataModule(batch_size=self.batch_size)
-        else:
-            data_module = MNISTDataModule(data_dir="./data", batch_size=self.batch_size)
-            
-        data_module.prepare_data()
-        data_module.setup(transform=self.transform)
-        self.data_module = data_module
+        self.scheduler = scheduler
+        self.image_shape = image_shape
     def forward(self, batch):
         # print(batch)
         images,_= batch
@@ -516,21 +522,41 @@ class LightningImageDenoiser(pl.LightningModule):
         t = torch.randint(0,self.N,(bs,),device = images.device)
         eps = torch.rand_like(images,device=images.device)
         x_t = self.ddpm.sampling_forward(images, t, eps)
+        # print(images.max(),images.min(),x_t.max(),x_t.min())
         eps_theta = self.model(x_t, t.reshape(bs, 1))
+        # print(t)
+        # print("training ",eps.max(),x_t.max(),eps_theta.max())
         loss = self.criterion(eps,eps_theta)
         return loss 
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
-        return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'monitor': 'val_loss',  # 监控验证集上的损失
-                'mode': 'min'           # 当监控指标不再降低时，减少学习率
+        if self.scheduler == "ReduceLROnPlateau":
+            
+            scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': {
+                    'scheduler': scheduler,
+                    'monitor': 'val_loss',  # 监控验证集上的损失
+                    'mode': 'min'           # 当监控指标不再降低时，减少学习率
+                }
             }
-        }
+        elif self.scheduler == "CosineAnnealingLR":
+            from torch.optim.lr_scheduler import CosineAnnealingLR
+            self.scheduler = CosineAnnealingLR(optimizer, T_max=10)  # 定义CosineAnnealingLR调度器
+            
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': self.scheduler
+            }
+        else:
+            return optimizer
+    def lr_scheduler_step(self, epoch, batch_idx, optimizer,**kwargs):
+        # Manually update the learning rate based on the scheduler
+        if self.scheduler is not None:
+            self.scheduler.step()  # Update the scheduler
+            
     def validation_step(self, batch, batch_idx):
         val_loss = self(batch)
         self.log('val_loss', val_loss, on_step=False, on_epoch=True, sync_dist=True, prog_bar=True)
@@ -539,37 +565,19 @@ class LightningImageDenoiser(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         loss = self(batch)
         self.log('train_loss', loss)
+        self.log('learning_rate', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False)
         return loss
-    @staticmethod
-    def collate_fn(batch):
-        # print(type(batch))
-        # batch {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=178x218 at 0x7F421C6FBD30>}
-        transform = transforms.Compose([
-            # transforms.RandomCrop(size=(28, 28)),
-            transforms.Resize((64, 64)),  # Resize images to (128, 128)
-            transforms.ToTensor(),           # Convert images to tensors
-            transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
-        ])
-        transformed_batch = torch.stack([transform(example['image']) for example in batch]) 
-        # print(transformed_batch.shape)
-        return transformed_batch,None
-    def train_dataloader(self):
-        return DataLoader(self.data_module.train_dataset, batch_size=self.batch_size, collate_fn = self.collate_fn,shuffle=True,num_workers=self.num_workers)
-        return self.data_module.train_dataloader(num_workers=self.num_workers)
-        dataset = ImageFolder(root='./fake_image_folder', transform=transform)
-        return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True)
-    def val_dataloader(self):
-        return DataLoader(self.data_module.val_dataset, batch_size=self.batch_size,collate_fn = self.collate_fn,num_workers=self.num_workers)
-        return self.data_module.val_dataloader(num_workers=self.num_workers)
+
 
     def sample_images(self, output_dir, n_sample=10, device="cuda", simple_var=True):
         max_batch_size = 32
         self.to(device)
-        self.eval()
+        self.model.eval()
         with torch.no_grad():
             for i in range(0, n_sample, max_batch_size):
-                shape = (min(max_batch_size, n_sample - i), 1, 32, 32)
+                shape = (min(max_batch_size, n_sample - i),*self.image_shape)
                 imgs = self.ddpm.sampling_backward(shape, self.model, device=device, simple_var=simple_var).detach().cpu()
+                print(imgs.max(),imgs.min())
                 imgs = (imgs + 1) / 2 * 255
                 imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).numpy()
                 os.makedirs(output_dir, exist_ok=True)
@@ -614,10 +622,11 @@ def parse_args():
     parser.add_argument('--max_beta', type=float, default=0.02, help='Maximum value of beta for DDPM')
     parser.add_argument('--max_step', type=int, default=1000, help='Number of steps (N) for DDPM')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for optimizer')
-    parser.add_argument('--batch_size', type=int, default=512, help='Batch size for training')
+    parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for training')
     parser.add_argument('--num_workers', type=int, default=63, help='num_workers training data loader')
     parser.add_argument('--channels', type=int, default=3, help='channels of image ')
     parser.add_argument('--imsize', type=int, default=64, help='image size ')
+    parser.add_argument('--scheduler', type=str, default="CosineAnnealingLR", help='lr policy')
 
     # 解析命令行参数
     args = parser.parse_args()
@@ -627,6 +636,17 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     if args.train:
+        
+        # dataset = "mnist"
+        dataset = "celeba"
+        if dataset =="celeba":
+            data_module = CelebDataModule(batch_size=args.batch_size,num_workers=args.num_workers)
+        else:
+            data_module = MNISTDataModule(data_dir="./data", batch_size=args.batch_size)
+            
+        data_module.prepare_data()
+        data_module.setup()
+
         model = LightningImageDenoiser(
             min_beta=args.min_beta,
             max_beta=args.max_beta,
@@ -635,12 +655,13 @@ if __name__ == "__main__":
             num_workers=args.num_workers,
             channels=args.channels,
             imsize= args.imsize,
-            lr = args.lr
+            lr = args.lr,
+            scheduler=args.scheduler,
             )
 
         # 设置保存 checkpoint 的回调函数
         checkpoint_callback = ModelCheckpoint(
-            dirpath="./checkpoints",  # 保存 checkpoint 的目录
+            dirpath="./checkpoints/linear_normal",  # 保存 checkpoint 的目录
             filename="model-{epoch:02d}-{val_loss:.5f}",  # checkpoint 文件名格式
             monitor="val_loss",  # 监控的指标，这里使用验证集损失
             mode="min",  # 指定监控模式为最小化验证集损失
@@ -649,33 +670,47 @@ if __name__ == "__main__":
         )
         
         # pretrain_path = "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=443-train_loss=0.00147.ckpt"
-        pretrain_path = None
+        # pretrain_path = "/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=159-val_loss=0.00454.ckpt"
+        pretrain_path = None 
         trainer = pl.Trainer(
             accelerator="gpu",
             devices=args.devices,                    # 使用一块 GPU 进行训练
             max_epochs=args.max_epochs,             # 最大训练 epoch 数
-            logger=pl.loggers.TensorBoardLogger("logs/", name="celeb_example"),
+            logger=pl.loggers.TensorBoardLogger("logs/", name="linear_normal_celeba"),
             # progress_bar_refresh_rate=20,  # 进度条刷新频率
             callbacks=[checkpoint_callback],  # 注册 checkpoint 回调函数
         )
 
-        trainer.fit(model)
+        trainer.fit(model,data_module,ckpt_path = pretrain_path)
     else:
         paths = ["/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=35-val_loss=0.00.ckpt",
         "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=57-val_loss=0.00.ckpt",
         "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=15-val_loss=0.00.ckpt"]
-        paths = os.listdir("./checkpoints")
-        paths = [os.path.join("./checkpoints",i) for i in paths]
+        ckpt_folder = "./checkpoints/linear_normal"
+        paths = os.listdir(ckpt_folder)
+        paths = [os.path.join(ckpt_folder,i) for i in paths]
         for path in paths:
             ckpt = os.path.basename(path).replace(".ckpt","")
-            image_shape=[1,32,32]
-            net = UNet(n_steps=1000,image_shape=image_shape )
-            net.load_state_dict(torch.load(path),strict=False)
-            ddpm = DDPM(min_beta=0.0001,max_beta=0.02,N=1000)
-            sample_image(ddpm,
-                    net,
-                    f'./sample/{ckpt}',
-                    image_shape=image_shape,
-                    n_sample=32,
-                    device="cuda:3",
-                    )
+            model = LightningImageDenoiser(
+                min_beta=args.min_beta,
+                max_beta=args.max_beta,
+                N = args.max_steps,
+                batch_size = args.batch_size,
+                num_workers=args.num_workers,
+                channels=args.channels,
+                imsize= args.imsize,
+                lr = args.lr,
+                scheduler=args.scheduler,
+                )
+            model.load_state_dict(torch.load(path)['state_dict'],strict=True)
+            
+            # net.load_state_dict(torch.load(path)['state_dict'],strict=True)
+            # ddpm = DDPM(min_beta=0.0001,max_beta=0.02,N=1000)
+            model.sample_images(f'./sample/{ckpt}',n_sample=32,device="cuda:0")
+            # sample_image(model.ddpm,
+            #         model.model,
+            #         f'./sample/{ckpt}',
+            #         image_shape=image_shape,
+            #         n_sample=32,
+            #         device="cuda:3",
+            #         )
