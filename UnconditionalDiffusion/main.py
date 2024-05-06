@@ -1,6 +1,6 @@
 """
 autor: haoyu
-date: 20240501-20240506
+date: 20240501-0506
 an simplified unconditional diffusion for image generation
 """
 import os , cv2 ,argparse
@@ -43,7 +43,6 @@ during the inference stage:
 ### borrowed from https://github.com/SingleZombie/DL-Demos/blob/master/dldemos/ddim/network.py
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, max_seq_len: int, d_model: int):
         super().__init__()
 
@@ -454,7 +453,7 @@ class DDPM(nn.Module):
             x = self.sampling_step(net, x, t, simple_var)
         return x
     @torch.no_grad()
-    def sampling_step(self,net,x_t, t,simple_var,use_noise=False,clip_denoised=False):
+    def sampling_step(self,net,x_t, t,simple_var,use_noise=True,clip_denoised=False):
         bs = x_t.shape[0]
         t_tensor = t*torch.ones(bs,dtype=torch.long,device=x_t.device).reshape(-1,1)
         if t == 0:
@@ -463,15 +462,14 @@ class DDPM(nn.Module):
             if simple_var:
                 var = self.betas[t]
             else:
-                var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t])*self.betas[t] 
+                var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t]) * self.betas[t] 
             #这个地方还真写错了 randn_like和rand_like不一样wor
             noise = torch.randn_like(x_t) * torch.sqrt(var)
         eps = net(x_t,t_tensor)
         # with open("./cache.txt",'a') as f:
         #     f.write(f"{eps.mean().item()},{eps.max().item()},{eps.min().item()}\n")
         eps = ((1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t])) *eps 
-        mean = (x_t - eps) 
-        mean/= torch.sqrt(self.alphas[t])
+        mean = (x_t - eps) / torch.sqrt(self.alphas[t])
         # eps = torch.sqrt(1-self.alpha_bars[t]) * eps 
         # print(1-self.alpha_bars[t])
         # mean = (x_t-eps)/torch.sqrt(self.alpha_bars[t])
