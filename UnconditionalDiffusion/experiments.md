@@ -4,11 +4,11 @@
 
 Celeb64 example: 
 
-
-
-
-
 # Debug
+
+
+
+## noise shift 
 
 在采样的过程中发现: noise预测的值会越来越大 
 

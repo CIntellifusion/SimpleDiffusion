@@ -1,6 +1,6 @@
 """
 autor: haoyu
-date: 20240501
+date: 20240501-20240506
 an simplified unconditional diffusion for image generation
 """
 import os , cv2 ,argparse
@@ -438,7 +438,7 @@ class DDPM(nn.Module):
         result = eps * torch.sqrt(1-alpha_bar) + torch.sqrt(alpha_bar)*x
         return result
         
-        
+    @torch.no_grad()
     def sampling_backward(self, image_or_shape,net,device="cuda",simple_var=True):
 
         if isinstance(image_or_shape,torch.Tensor):
@@ -446,7 +446,6 @@ class DDPM(nn.Module):
         else:
             x = torch.randn(image_or_shape,device=device)
         # debug 
-        
         # print(x.max(),x.min(),x.mean())
         # for t in range(self.N-1,-1,-1):
         #     self.sampling_step(net, x, t, simple_var)
@@ -454,28 +453,35 @@ class DDPM(nn.Module):
         for t in range(self.N-1,-1,-1):
             x = self.sampling_step(net, x, t, simple_var)
         return x
-        
-    def sampling_step(self,net,x_t, t,simple_var,use_noise=True):
+    @torch.no_grad()
+    def sampling_step(self,net,x_t, t,simple_var,use_noise=False,clip_denoised=False):
         bs = x_t.shape[0]
         t_tensor = t*torch.ones(bs,dtype=torch.long,device=x_t.device).reshape(-1,1)
-        if t== 0:
+        if t == 0:
             noise = 0 
         else:
             if simple_var:
                 var = self.betas[t]
             else:
                 var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t])*self.betas[t] 
-            #这个地方还真写错了 
-            noise = torch.rand_like(x_t) * torch.sqrt(var)
+            #这个地方还真写错了 randn_like和rand_like不一样wor
+            noise = torch.randn_like(x_t) * torch.sqrt(var)
         eps = net(x_t,t_tensor)
-        print(eps.mean(),eps.max(),eps.min())
-        eps = (1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t]) *eps 
+        # with open("./cache.txt",'a') as f:
+        #     f.write(f"{eps.mean().item()},{eps.max().item()},{eps.min().item()}\n")
+        eps = ((1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t])) *eps 
         mean = (x_t - eps) 
         mean/= torch.sqrt(self.alphas[t])
+        # eps = torch.sqrt(1-self.alpha_bars[t]) * eps 
+        # print(1-self.alpha_bars[t])
+        # mean = (x_t-eps)/torch.sqrt(self.alpha_bars[t])
+        # print(f"{eps.mean().item()},{eps.max().item()},{eps.min().item()}")
         if use_noise:
             x_t_prev = mean + noise
         else:
             x_t_prev = mean
+        if clip_denoised:
+            x_t_prev.clamp_(-1., 1.)
         # print("noise",self.betas[t],noise.mean(),noise.max(),noise.min())
         # print("t",t_tensor[0],"eps:",eps.max(),eps.min(),eps.mean())
         # print(t_tensor)
@@ -501,6 +507,7 @@ class LightningImageDenoiser(pl.LightningModule):
                  num_workers=63,
                  channels = 1,
                  scheduler = "CosineAnnealingLR",
+                 sample_output_dir = "./samples",
                  ):
         super(LightningImageDenoiser, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
@@ -514,13 +521,14 @@ class LightningImageDenoiser(pl.LightningModule):
         self.num_workers = num_workers
         self.scheduler = scheduler
         self.image_shape = image_shape
+        self.sample_output_dir = sample_output_dir
     def forward(self, batch):
         # print(batch)
         images,_= batch
         # print(images.shape)
         bs = images.shape[0]
         t = torch.randint(0,self.N,(bs,),device = images.device)
-        eps = torch.rand_like(images,device=images.device)
+        eps = torch.randn_like(images,device=images.device)
         x_t = self.ddpm.sampling_forward(images, t, eps)
         # print(images.max(),images.min(),x_t.max(),x_t.min())
         eps_theta = self.model(x_t, t.reshape(bs, 1))
@@ -577,13 +585,16 @@ class LightningImageDenoiser(pl.LightningModule):
             for i in range(0, n_sample, max_batch_size):
                 shape = (min(max_batch_size, n_sample - i),*self.image_shape)
                 imgs = self.ddpm.sampling_backward(shape, self.model, device=device, simple_var=simple_var).detach().cpu()
-                print(imgs.max(),imgs.min())
+                print("in sample images: ",imgs.max(),imgs.min())
                 imgs = (imgs + 1) / 2 * 255
                 imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).numpy()
                 os.makedirs(output_dir, exist_ok=True)
                 for j, img in enumerate(imgs):
                     cv2.imwrite(f'{output_dir}/{i + j}.jpg', img)
-                
+    
+    def on_train_epoch_end(self):
+        output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch}')
+        self.sample_images(output_dir=output_dir,n_sample=10,device="cuda",simple_var=True)    
 def sample_image(ddpm,net,output_dir,image_shape,n_sample,device="cuda",simple_var=True):
     max_batch_size = 32
     net.to(device)
@@ -612,8 +623,8 @@ def parse_args():
     解析命令行参数，并返回解析结果。
     """
     parser = argparse.ArgumentParser(description='Training script')
-
-    # 添加命令行参数
+    
+    parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
     parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
     parser.add_argument('--devices', type=str, default='0,', help='Specify the device(s) for training (e.g., "cuda" or "cuda:0")')
     parser.add_argument('--max_epochs', type=int, default=1200, help='Maximum number of epochs for training')
@@ -626,15 +637,15 @@ def parse_args():
     parser.add_argument('--num_workers', type=int, default=63, help='num_workers training data loader')
     parser.add_argument('--channels', type=int, default=3, help='channels of image ')
     parser.add_argument('--imsize', type=int, default=64, help='image size ')
-    parser.add_argument('--scheduler', type=str, default="CosineAnnealingLR", help='lr policy')
+    parser.add_argument('--scheduler', type=str, default="None", help='lr policy')
 
-    # 解析命令行参数
     args = parser.parse_args()
 
     return args
 
 if __name__ == "__main__":
     args = parse_args()
+    expname = args.expname
     if args.train:
         
         # dataset = "mnist"
@@ -657,11 +668,12 @@ if __name__ == "__main__":
             imsize= args.imsize,
             lr = args.lr,
             scheduler=args.scheduler,
+            sample_output_dir=f"./sample/{expname}"
             )
 
         # 设置保存 checkpoint 的回调函数
         checkpoint_callback = ModelCheckpoint(
-            dirpath="./checkpoints/linear_normal",  # 保存 checkpoint 的目录
+            dirpath=f"./checkpoints/{expname}",  # 保存 checkpoint 的目录
             filename="model-{epoch:02d}-{val_loss:.5f}",  # checkpoint 文件名格式
             monitor="val_loss",  # 监控的指标，这里使用验证集损失
             mode="min",  # 指定监控模式为最小化验证集损失
@@ -676,19 +688,17 @@ if __name__ == "__main__":
             accelerator="gpu",
             devices=args.devices,                    # 使用一块 GPU 进行训练
             max_epochs=args.max_epochs,             # 最大训练 epoch 数
-            logger=pl.loggers.TensorBoardLogger("logs/", name="linear_normal_celeba"),
+            logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
             # progress_bar_refresh_rate=20,  # 进度条刷新频率
             callbacks=[checkpoint_callback],  # 注册 checkpoint 回调函数
         )
 
         trainer.fit(model,data_module,ckpt_path = pretrain_path)
     else:
-        paths = ["/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=35-val_loss=0.00.ckpt",
-        "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=57-val_loss=0.00.ckpt",
-        "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=15-val_loss=0.00.ckpt"]
-        ckpt_folder = "./checkpoints/linear_normal"
+        ckpt_folder = f"./checkpoints/{expname}"
         paths = os.listdir(ckpt_folder)
         paths = [os.path.join(ckpt_folder,i) for i in paths]
+        paths = ["/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/linear_normal/model-epoch=1184-val_loss=0.00332.ckpt"]
         for path in paths:
             ckpt = os.path.basename(path).replace(".ckpt","")
             model = LightningImageDenoiser(
