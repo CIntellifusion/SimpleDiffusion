@@ -430,7 +430,7 @@ class DDPM(nn.Module):
         self.register_buffer("betas", betas)
         self.N = N
         
-    def sampling_forward(self,x,t,eps=None):
+    def sample_forward(self,x,t,eps=None):
         alpha_bar = self.alpha_bars[t].reshape(-1,1,1,1)
         if eps is None:
             eps = torch.randn_like(x)
@@ -438,8 +438,7 @@ class DDPM(nn.Module):
         return result
         
     @torch.no_grad()
-    def sampling_backward(self, image_or_shape,net,device="cuda",simple_var=True):
-
+    def sample_backward(self, image_or_shape,net,device="cuda",simple_var=True):
         if isinstance(image_or_shape,torch.Tensor):
             x = image_or_shape
         else:
@@ -447,13 +446,13 @@ class DDPM(nn.Module):
         # debug 
         # print(x.max(),x.min(),x.mean())
         # for t in range(self.N-1,-1,-1):
-        #     self.sampling_step(net, x, t, simple_var)
+        #     self.sample_backward_step(net, x, t, simple_var)
         # exit()
         for t in range(self.N-1,-1,-1):
-            x = self.sampling_step(net, x, t, simple_var)
+            x = self.sample_backward_step(net, x, t, simple_var)
         return x
     @torch.no_grad()
-    def sampling_step(self,net,x_t, t,simple_var,use_noise=True,clip_denoised=False):
+    def sample_backward_step(self,net,x_t, t,simple_var,use_noise=True,clip_denoised=False):
         bs = x_t.shape[0]
         t_tensor = t*torch.ones(bs,dtype=torch.long,device=x_t.device).reshape(-1,1)
         if t == 0:
@@ -489,10 +488,39 @@ class DDIM(DDPM):
     def __init__(self,
                  min_beta: float = 0.0001,
                  max_beta: float = 0.02,
+                 ddim_step: int = 20, # sample interval of ddim 
                   N: int=1000):
-        super().__init__(  min_beta, max_beta,N)
-
-
+        super().__init__(min_beta, max_beta,N)
+        self.ddim_step = ddim_step
+        
+    def sample_backward(self, image_or_shape, net, device="cuda", simple_var=True):
+        if isinstance(image_or_shape,torch.Tensor):
+            x = image_or_shape
+        else:
+            x = torch.randn(image_or_shape,device=device)
+        
+        sample_timestep = torch.linspace(0,1,self.ddim_step+1,device=device)
+        for i in range(self.ddim_step-1,0,-1):
+            bs = x.shape[0]
+            t_cur = sample_timestep[i]
+            t_prev = sample_timestep[i-1]
+            
+            ab_p = self.arlpha_bars[t_prev]
+            ab_c = self.alpha_bars[t_cur]
+            t_tensor = (bs * torch.ones(x.shape[0],device=device,dtype=torch.long)).reshpae(-1,1)
+            eps = net(x, t_tensor)
+            
+            if simple_var:
+                var = torch.sqrt(1-ab_p/ab_c) 
+            else:
+                eta = 1 # for ddim eta=1
+                var = eta * (1 - ab_p) / (1 - ab_c) * (1 - ab_c / ab_p)
+            noise = torch.randn_like(x)
+            
+            x = torch.sqrt(ab_p/ab_c) * x +\
+                eps * var  + \
+                torch.sqrt(var) * noise
+        return x 
 ### trainer 
 class LightningImageDenoiser(pl.LightningModule):
     def __init__(self, 
@@ -527,7 +555,7 @@ class LightningImageDenoiser(pl.LightningModule):
         bs = images.shape[0]
         t = torch.randint(0,self.N,(bs,),device = images.device)
         eps = torch.randn_like(images,device=images.device)
-        x_t = self.ddpm.sampling_forward(images, t, eps)
+        x_t = self.ddpm.sample_forward(images, t, eps)
         # print(images.max(),images.min(),x_t.max(),x_t.min())
         eps_theta = self.model(x_t, t.reshape(bs, 1))
         # print(t)
@@ -582,7 +610,7 @@ class LightningImageDenoiser(pl.LightningModule):
         with torch.no_grad():
             for i in range(0, n_sample, max_batch_size):
                 shape = (min(max_batch_size, n_sample - i),*self.image_shape)
-                imgs = self.ddpm.sampling_backward(shape, self.model, device=device, simple_var=simple_var).detach().cpu()
+                imgs = self.ddpm.sample_backward(shape, self.model, device=device, simple_var=simple_var).detach().cpu()
                 print("in sample images: ",imgs.max(),imgs.min())
                 imgs = (imgs + 1) / 2 * 255
                 imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).numpy()
@@ -593,27 +621,8 @@ class LightningImageDenoiser(pl.LightningModule):
     def on_train_epoch_end(self):
         output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch}')
         self.sample_images(output_dir=output_dir,n_sample=10,device="cuda",simple_var=True)    
-def sample_image(ddpm,net,output_dir,image_shape,n_sample,device="cuda",simple_var=True):
-    max_batch_size = 32
-    net.to(device)
-    net.eval()
-    with torch.no_grad():
-        for i in range(0,n_sample,max_batch_size):
-            shape = (max_batch_size, *image_shape)
-            imgs = ddpm.sampling_backward(shape,
-                                        net,
-                                        device=device,
-                                        simple_var=simple_var,
-                                        ).detach().cpu()
-            imgs = (imgs + 1) / 2 * 255
-            print(imgs.shape)
-            imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0,2,3,1).numpy()
-            # output_dir = os.path.dirname(output_path)
-            os.makedirs(output_dir, exist_ok=True)
-            for j, img in enumerate(imgs):
-                cv2.imwrite(f'{output_dir}/{i*max_batch_size+j}.jpg', img)
-        for i in range(n_sample%max_batch_size):
-            pass
+
+
     
 ###  parse args 
 def parse_args():
