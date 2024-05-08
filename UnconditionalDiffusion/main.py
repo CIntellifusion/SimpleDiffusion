@@ -1,6 +1,6 @@
 """
 autor: haoyu
-date: 20240501-0506
+date: 20240501-0506-0508
 an simplified unconditional diffusion for image generation
 """
 import os , cv2 ,argparse
@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint,EarlyStopping, Callback
 import numpy as np
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-
+from torchvision.utils import save_image, make_grid
 
 """ 
 an simple overview of the code structure
@@ -332,10 +332,11 @@ class UNet(nn.Module):
 
 ### data
 class MNISTDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir="./", batch_size=64):
+    def __init__(self, data_dir="./", batch_size=64,num_workers=63):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.num_workers = num_workers
 
     def prepare_data(self):
         # This method is intended for dataset downloading and preparation
@@ -348,18 +349,19 @@ class MNISTDataModule(pl.LightningDataModule):
         if transform is None : 
             transform = transforms.Compose([
                 transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
+                # transforms.Normalize((0.1307,), (0.3081,)) # 
             ])
         
         if stage == 'fit' or stage is None:
             self.train_dataset = MNIST(self.data_dir, train=True, transform=transform)
             self.val_dataset = MNIST(self.data_dir, train=False, transform=transform)
 
-    def train_dataloader(self,num_workers):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True,num_workers=num_workers)
 
-    def val_dataloader(self,num_workers):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size,num_workers=num_workers)
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True,num_workers=self.num_workers,pin_memory=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size,num_workers=self.num_workers,pin_memory=True)
 
 class CelebDataModule(pl.LightningDataModule):
     def __init__(self, batch_size=64,num_workers=63):
@@ -484,6 +486,7 @@ class DDPM(nn.Module):
         # print(t_tensor)
         return x_t_prev
 
+
 class DDIM(DDPM):
     def __init__(self,
                  min_beta: float = 0.0001,
@@ -521,6 +524,7 @@ class DDIM(DDPM):
                 eps * var  + \
                 torch.sqrt(var) * noise
         return x 
+
 ### trainer 
 class LightningImageDenoiser(pl.LightningModule):
     def __init__(self, 
@@ -534,11 +538,12 @@ class LightningImageDenoiser(pl.LightningModule):
                  channels = 1,
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
+                 sample_epoch_interval = 20,
                  ):
         super(LightningImageDenoiser, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
-        self.model = UNet(n_steps=N, image_shape=image_shape)
+        self.model = UNet( n_steps=N, image_shape=image_shape)
         self.ddpm = DDPM(min_beta=min_beta,max_beta=max_beta,N=N)
         self.criterion = nn.MSELoss()
         self.N = N 
@@ -548,6 +553,7 @@ class LightningImageDenoiser(pl.LightningModule):
         self.scheduler = scheduler
         self.image_shape = image_shape
         self.sample_output_dir = sample_output_dir
+        self.sample_epoch_interval = sample_epoch_interval
     def forward(self, batch):
         # print(batch)
         images,_= batch
@@ -607,6 +613,7 @@ class LightningImageDenoiser(pl.LightningModule):
         max_batch_size = 32
         self.to(device)
         self.model.eval()
+        os.makedirs(output_dir, exist_ok=True)
         with torch.no_grad():
             for i in range(0, n_sample, max_batch_size):
                 shape = (min(max_batch_size, n_sample - i),*self.image_shape)
@@ -614,14 +621,13 @@ class LightningImageDenoiser(pl.LightningModule):
                 print("in sample images: ",imgs.max(),imgs.min())
                 imgs = (imgs + 1) / 2 * 255
                 imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).numpy()
-                os.makedirs(output_dir, exist_ok=True)
-                for j, img in enumerate(imgs):
-                    cv2.imwrite(f'{output_dir}/{i + j}.jpg', img)
+                output_file = os.path.join(output_dir, f"{i:04d}_{i+len(imgs)-1:04d}.png")
+                save_image(imgs.view(n_sample,*self.image_shape),output_file, nrow=5, normalize=True)
     
     def on_train_epoch_end(self):
-        output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch}')
-        self.sample_images(output_dir=output_dir,n_sample=10,device="cuda",simple_var=True)    
-
+        if self.current_epoch + 1  % self.sample_epoch_interval==0:
+            output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch}')
+            self.sample_images(output_dir=output_dir,n_sample=10,device="cuda",simple_var=True)    
 
     
 ###  parse args 
@@ -630,11 +636,11 @@ def parse_args():
     解析命令行参数，并返回解析结果。
     """
     parser = argparse.ArgumentParser(description='Training script')
-    
+    ## epoch 200 with loss 0.02 is enough to generate on mnist 
     parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
     parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
     parser.add_argument('--devices', type=str, default='0,', help='Specify the device(s) for training (e.g., "cuda" or "cuda:0")')
-    parser.add_argument('--max_epochs', type=int, default=1200, help='Maximum number of epochs for training')
+    parser.add_argument('--max_epochs', type=int, default=200, help='Maximum number of epochs for training')
     parser.add_argument('--max_steps', type=int, default=1000, help='Maximum number of epochs for training')
     parser.add_argument('--min_beta', type=float, default=0.0001, help='Minimum value of beta for DDPM')
     parser.add_argument('--max_beta', type=float, default=0.02, help='Maximum value of beta for DDPM')
@@ -645,7 +651,8 @@ def parse_args():
     parser.add_argument('--channels', type=int, default=3, help='channels of image ')
     parser.add_argument('--imsize', type=int, default=64, help='image size ')
     parser.add_argument('--scheduler', type=str, default="None", help='lr policy')
-
+    parser.add_argument('--dataset', type=str, default="mnist", help='dataset')
+    parser.add_argument('--sample_epoch_interval', type=int, default=10, help='sample interval')
     args = parser.parse_args()
 
     return args
@@ -654,13 +661,12 @@ if __name__ == "__main__":
     args = parse_args()
     expname = args.expname
     if args.train:
-        
-        # dataset = "mnist"
-        dataset = "celeba"
+        dataset = args.dataset
+        # dataset = "celeba"
         if dataset =="celeba":
             data_module = CelebDataModule(batch_size=args.batch_size,num_workers=args.num_workers)
         else:
-            data_module = MNISTDataModule(data_dir="./data", batch_size=args.batch_size)
+            data_module = MNISTDataModule(data_dir="/home/haoyu/research/simplemodels/data", batch_size=args.batch_size,num_workers=args.num_workers)
             
         data_module.prepare_data()
         data_module.setup()
@@ -675,7 +681,8 @@ if __name__ == "__main__":
             imsize= args.imsize,
             lr = args.lr,
             scheduler=args.scheduler,
-            sample_output_dir=f"./sample/{expname}"
+            sample_output_dir=f"./sample/{expname}",
+            sample_epoch_interval=args.sample_epoch_interval
             )
 
         # 设置保存 checkpoint 的回调函数
@@ -690,6 +697,7 @@ if __name__ == "__main__":
         
         # pretrain_path = "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=443-train_loss=0.00147.ckpt"
         # pretrain_path = "/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=159-val_loss=0.00454.ckpt"
+        pretrain_path = "/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/randn/model-epoch=351-val_loss=0.01861.ckpt" 
         pretrain_path = None 
         trainer = pl.Trainer(
             accelerator="gpu",
@@ -718,16 +726,7 @@ if __name__ == "__main__":
                 imsize= args.imsize,
                 lr = args.lr,
                 scheduler=args.scheduler,
+                sample_epoch_interval=args.sample_epoch_interval
                 )
             model.load_state_dict(torch.load(path)['state_dict'],strict=True)
-            
-            # net.load_state_dict(torch.load(path)['state_dict'],strict=True)
-            # ddpm = DDPM(min_beta=0.0001,max_beta=0.02,N=1000)
             model.sample_images(f'./sample/{ckpt}',n_sample=32,device="cuda:0")
-            # sample_image(model.ddpm,
-            #         model.model,
-            #         f'./sample/{ckpt}',
-            #         image_shape=image_shape,
-            #         n_sample=32,
-            #         device="cuda:3",
-            #         )
