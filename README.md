@@ -3,33 +3,62 @@ A simple diffusion framework for comprehensive understanding.
 
 Carry out a series training and record the training results. 
 
-Compare the result with papers. 
+Compare the result with papers.
+
+
+
+> we don’t understand what we can’t create. 
 
 # Task 1 Unconditional Diffusion
 
-- [ ] Implement a DDPM and DDIM that can generate Celeb64Image 
-- [ ] Unet Scalable Unet 
+- [x] Implement a DDPM and DDIM
 
-# Task 2 Conditional Diffusion
+- [x] Training On Mnist 
+
+![mnist_200epoch](README/mnist_200epoch.gif)
+
+- [x]  that can generate Celeb64Image  20240509 
+
+![celeb_200epoch_32pix](UnconditionalDiffusion/training_results/celeb_200epoch_32pix.gif)
+
+- [ ] Scalable Unet to 128 - 256 - 512 
+
+
+
+for further details please refer to `./UnoncditionalDiffusion/experiments.pptx`  and `./UnoncditionalDiffusion/experiments.md` 
+
+
+
+## Engineer Issues
+
+在VAE和UnconditionalDiffusion的代码中，`DataModule`和`Trainer`类重复度是非常高的。 在开发的过程中，用工程文件的形式可以保证代码的一致性。 但是会增加代码的复杂度。 
+
+
+
+第二点: 可以利用`importlib` +`omega_conf` 来简化类初始化。 参考VideoCrafter的实现。 
+
+
+
+# Task 2 Latent Diffusion
+
+- [ ] vae for compression 
+  - [x] train on mnist 
+
+- [ ] diffusion on other latent space: text , audio , mesh , etc.
+
+# Task 3Conditional Diffusion
 
 - [ ] pretrained text model for condition
 - [ ] different condition type: vanilla , token , cross attention etc. 
 - [ ] multiple condition : zero-conv(controlnet)
 
-
-
-# Task3 Latent Diffusion
-
-- [ ] vae for compression 
-- [ ] diffusion on other latent space: text , audio , mesh , etc.
-
-# Task4 Diffusion Transformer
+# Task 4 Diffusion Transformer
 
 - [ ] replace Unet with a transformer 
 
 
 
-# Task5 Video Diffusion
+# Task 5 Video Diffusion
 
 - [ ] insert temporal layer into diffusion 
 
