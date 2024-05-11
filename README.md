@@ -43,8 +43,17 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
 
 - [ ] vae for compression 
   - [x] train on mnist 
-
 - [ ] diffusion on other latent space: text , audio , mesh , etc.
+
+## 实现计划
+
+基于`UnconditionalDiffusion/main.py`采用相同的dataset，类似的Trainer设置。但是将scheduler,models(unet,vit),和vae分开。 
+
+Trainer里面要增加encode和decode的部分。 扩散的过程中，只是特征空间变了，其他的不变。 
+
+VAE的部分follow其他实现，写成first_stage_condition。 
+
+
 
 # Task 3Conditional Diffusion
 
