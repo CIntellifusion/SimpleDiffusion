@@ -1,6 +1,6 @@
 """
 autor: haoyu
-date: 20240501-0506-0508
+date: 20240501-0506
 an simplified unconditional diffusion for image generation
 """
 import os , cv2 ,argparse
@@ -19,6 +19,8 @@ import numpy as np
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.utils import save_image, make_grid
 
+## sorry to use global value 
+imsize = 32 
 """ 
 an simple overview of the code structure
 for a diffusion generator , we need to define: 
@@ -152,6 +154,10 @@ class SelfAttentionBlock(nn.Module):
 
         return x + res
 
+# multihead_attention = nn.MultiheadAttention(embed_dim, num_heads)
+
+# # 使用 MultiheadAttention 层处理输入张量
+# output, attention_weights = multihead_attention(x, x, x)
 
 class ResAttnBlock(nn.Module):
 
@@ -364,11 +370,11 @@ class MNISTDataModule(pl.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=self.batch_size,num_workers=self.num_workers,pin_memory=True)
 
 class CelebDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size=64,num_workers=63):
+    def __init__(self, batch_size=64,num_workers=63,imsize=32):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        
+        self.imsize = args.imsize 
     def split_dataset(self, dataset, split_ratio=0.2):
         """
         Divides the dataset into training and validation sets.
@@ -401,21 +407,75 @@ class CelebDataModule(pl.LightningDataModule):
         #     image = example['image']
         #     image.save("/home/haoyu/research/simplemodels/cache/test.jpg")
         transform = transforms.Compose([
-            transforms.Resize((64, 64)),  # Resize images to (128, 128)
-            transforms.ToTensor(),           # Convert images to tensors
+            transforms.Resize((imsize,imsize)),  
+            transforms.ToTensor(),           
             # transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
-            transforms.Lambda(lambda x: (x - 0.5) * 2)
+            # transforms.Lambda(lambda x: (x - 0.5) * 2) # unconment 
         ])
         transformed_batch = torch.stack([transform(example['image']) for example in batch])
         # print("transformerd",transformed_batch.mean(),transformed_batch.min(),transformed_batch.max())
         return transformed_batch,None
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, collate_fn=self.collate_fn, shuffle=True, num_workers=self.num_workers)
+        return DataLoader(self.train_dataset,
+                          batch_size=self.batch_size, 
+                          collate_fn=self.collate_fn, 
+                          shuffle=True, num_workers=self.num_workers,
+                          pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, collate_fn=self.collate_fn, num_workers=self.num_workers)
+        return DataLoader(self.val_dataset, 
+                          batch_size=self.batch_size, 
+                          collate_fn=self.collate_fn, num_workers=self.num_workers,
+                          pin_memory=True)
 
+class ImageDataModule(pl.LightningDataModule):
+    def __init__(self, batch_size=64,num_workers=63,imsize=32):
+        super().__init__()
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.imsize = args.imsize 
+    def split_dataset(self, dataset, split_ratio=0.2):
+        """
+        Divides the dataset into training and validation sets.
+
+        Args:
+        - dataset (datasets.Dataset): The dataset to be divided
+        - split_ratio (float): The proportion of the validation set, default is 0.2
+
+        Returns:
+        - train_dataset (datasets.Dataset): The divided training set
+        - val_dataset (datasets.Dataset): The divided validation set
+        """
+        num_val_samples = int(len(dataset) * split_ratio)
+
+        val_dataset = dataset.shuffle(seed=42).select(range(num_val_samples))
+        train_dataset = dataset.shuffle(seed=42).select(range(num_val_samples, len(dataset)))
+
+        return train_dataset, val_dataset
+
+    def prepare_data(self,imagepath=None):
+        transform = transforms.Compose([
+            transforms.Resize((imsize,imsize)),  
+            transforms.ToTensor(),           
+        ])
+        self.dataset = ImageFolder(imagepath,transform=transform)
+
+    def setup(self, stage=None):
+        if stage == 'fit' or stage is None:
+            self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
+        
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset,
+                          batch_size=self.batch_size, 
+                          shuffle=True, num_workers=self.num_workers,
+                          pin_memory=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, 
+                          batch_size=self.batch_size, 
+                          num_workers=self.num_workers,
+                          pin_memory=True)
 ### DDIM scheduler
 class DDPM(nn.Module):
     def __init__(self, min_beta, max_beta, N):
@@ -485,7 +545,6 @@ class DDPM(nn.Module):
         # print("t",t_tensor[0],"eps:",eps.max(),eps.min(),eps.mean())
         # print(t_tensor)
         return x_t_prev
-
 
 class DDIM(DDPM):
     def __init__(self,
@@ -590,6 +649,13 @@ class LightningImageDenoiser(pl.LightningModule):
                 'optimizer': optimizer,
                 'lr_scheduler': self.scheduler
             }
+        elif self.scheduler =="LineaerLR":
+            from torch.optim.lr_scheduler import StepLR
+            self.scheduler = StepLR(optimizer, step_size=2000, gamma=0.9)  # 定义CosineAnnealingLR调度器
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': self.scheduler
+            }
         else:
             return optimizer
     def lr_scheduler_step(self, epoch, batch_idx, optimizer,**kwargs):
@@ -609,7 +675,7 @@ class LightningImageDenoiser(pl.LightningModule):
         return loss
 
 
-    def sample_images(self, output_dir, n_sample=10, device="cuda", simple_var=True):
+    def sample_images(self, output_dir, n_sample=9, device="cuda", simple_var=True):
         max_batch_size = 32
         self.to(device)
         self.model.eval()
@@ -619,15 +685,16 @@ class LightningImageDenoiser(pl.LightningModule):
                 shape = (min(max_batch_size, n_sample - i),*self.image_shape)
                 imgs = self.ddpm.sample_backward(shape, self.model, device=device, simple_var=simple_var).detach().cpu()
                 print("in sample images: ",imgs.max(),imgs.min())
-                imgs = (imgs + 1) / 2 * 255
-                imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1).numpy()
-                output_file = os.path.join(output_dir, f"{i:04d}_{i+len(imgs)-1:04d}.png")
-                save_image(imgs.view(n_sample,*self.image_shape),output_file, nrow=5, normalize=True)
+                # imgs = (imgs + 1) / 2 * 255
+                # imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)#.numpy()
+                output_file = os.path.join(output_dir, "generated_images.png")
+                channels,h,w = self.image_shape
+                save_image(imgs.view(n_sample,channels,h,w),output_file, nrow=3, normalize=True)
     
     def on_train_epoch_end(self):
-        if self.current_epoch + 1  % self.sample_epoch_interval==0:
-            output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch}')
-            self.sample_images(output_dir=output_dir,n_sample=10,device="cuda",simple_var=True)    
+        if (self.current_epoch + 1)  % self.sample_epoch_interval==0:
+            output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch+1:05}')
+            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)    
 
     
 ###  parse args 
@@ -640,7 +707,7 @@ def parse_args():
     parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
     parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
     parser.add_argument('--devices', type=str, default='0,', help='Specify the device(s) for training (e.g., "cuda" or "cuda:0")')
-    parser.add_argument('--max_epochs', type=int, default=200, help='Maximum number of epochs for training')
+    parser.add_argument('--max_epochs', type=int, default=600, help='Maximum number of epochs for training')
     parser.add_argument('--max_steps', type=int, default=1000, help='Maximum number of epochs for training')
     parser.add_argument('--min_beta', type=float, default=0.0001, help='Minimum value of beta for DDPM')
     parser.add_argument('--max_beta', type=float, default=0.02, help='Maximum value of beta for DDPM')
@@ -651,8 +718,10 @@ def parse_args():
     parser.add_argument('--channels', type=int, default=3, help='channels of image ')
     parser.add_argument('--imsize', type=int, default=64, help='image size ')
     parser.add_argument('--scheduler', type=str, default="None", help='lr policy')
-    parser.add_argument('--dataset', type=str, default="mnist", help='dataset')
     parser.add_argument('--sample_epoch_interval', type=int, default=10, help='sample interval')
+    
+    parser.add_argument('--dataset', type=str, default="celeba", help='dataset')
+    parser.add_argument('--datapath', type=str, default=None, help='dataset')
     args = parser.parse_args()
 
     return args
@@ -660,14 +729,21 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     expname = args.expname
+    imsize = args.imsize
     if args.train:
         dataset = args.dataset
         # dataset = "celeba"
         if dataset =="celeba":
-            data_module = CelebDataModule(batch_size=args.batch_size,num_workers=args.num_workers)
+            data_module = CelebDataModule(batch_size=args.batch_size,
+                                          num_workers=args.num_workers,imsize=args.imsize)
+        elif dataset=="mnist":
+            data_module = MNISTDataModule(data_dir="/home/haoyu/research/simplemodels/data", 
+                                          batch_size=args.batch_size,num_workers=args.num_workers)
+        elif dataset=="image":
+            data_module = ImageDataModule(data_dir=args.datapath, 
+                                          batch_size=args.batch_size,num_workers=args.num_workers)
         else:
-            data_module = MNISTDataModule(data_dir="/home/haoyu/research/simplemodels/data", batch_size=args.batch_size,num_workers=args.num_workers)
-            
+            raise NotImplementedError("Not supported dataset")
         data_module.prepare_data()
         data_module.setup()
 
@@ -694,10 +770,6 @@ if __name__ == "__main__":
             save_top_k=3,  # 保存最好的 3 个 checkpoint
             verbose=True
         )
-        
-        # pretrain_path = "/data2/wuhaoyu/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=443-train_loss=0.00147.ckpt"
-        # pretrain_path = "/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/model-epoch=159-val_loss=0.00454.ckpt"
-        pretrain_path = "/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/randn/model-epoch=351-val_loss=0.01861.ckpt" 
         pretrain_path = None 
         trainer = pl.Trainer(
             accelerator="gpu",
