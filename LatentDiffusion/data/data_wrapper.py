@@ -1,4 +1,9 @@
-
+import pytorch_lightning as pl
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from torchvision.datasets import MNIST
+import torch 
+from datasets import load_dataset
 ### data
 class MNISTDataModule(pl.LightningDataModule):
     def __init__(self, data_dir="./", batch_size=64,num_workers=63):
@@ -18,7 +23,6 @@ class MNISTDataModule(pl.LightningDataModule):
         if transform is None : 
             transform = transforms.Compose([
                 transforms.ToTensor(),
-                # transforms.Normalize((0.1307,), (0.3081,)) # 
             ])
         
         if stage == 'fit' or stage is None:
@@ -37,7 +41,7 @@ class CelebDataModule(pl.LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.imsize = args.imsize 
+        self.imsize = imsize 
     def split_dataset(self, dataset, split_ratio=0.2):
         """
         Divides the dataset into training and validation sets.
@@ -64,20 +68,15 @@ class CelebDataModule(pl.LightningDataModule):
         if stage == 'fit' or stage is None:
             self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
 
-    @staticmethod
-    def collate_fn(batch):
-        # for example in batch:
-        #     image = example['image']
-        #     image.save("/home/haoyu/research/simplemodels/cache/test.jpg")
+
+    def apply_transform(self, example):
         transform = transforms.Compose([
-            transforms.Resize((imsize,imsize)),  
-            transforms.ToTensor(),           
-            # transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
-            # transforms.Lambda(lambda x: (x - 0.5) * 2) # unconment 
+            transforms.Resize((self.imsize, self.imsize)),
+            transforms.ToTensor(),
+            # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Normalize images
+            # transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
         ])
-        transformed_batch = torch.stack([transform(example['image']) for example in batch])
-        # print("transformerd",transformed_batch.mean(),transformed_batch.min(),transformed_batch.max())
-        return transformed_batch,None
+        return transform(example['image'])
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,

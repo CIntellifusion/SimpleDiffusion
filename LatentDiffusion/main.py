@@ -19,6 +19,11 @@ import numpy as np
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.utils import save_image, make_grid
 
+### local files 
+from data.data_wrapper import MNISTDataModule,CelebDataModule
+from models.unet import UNet
+from schedulers.ddpm import DDPM
+from vae.vae import VAE
 ## sorry to use global value 
 imsize = 32 
 """ 
@@ -41,11 +46,8 @@ during the inference stage:
 """
 
 
-
-
-
 ### trainer 
-class LightningImageDenoiser(pl.LightningModule):
+class LatentDiffusion(pl.LightningModule):
     def __init__(self, 
                  batch_size=512, 
                  lr=0.001,
@@ -58,12 +60,16 @@ class LightningImageDenoiser(pl.LightningModule):
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
+                 vae_config = {"x_dim":784,'hidden_dim':400,"latent_dim":200},
                  ):
-        super(LightningImageDenoiser, self).__init__()
+        super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
-        self.model = UNet( n_steps=N, image_shape=image_shape)
+        #TODO: latent shape 
+        self.latent_shape = None 
+        self.denoiser = UNet( n_steps=N, image_shape=self.latent_shape)
         self.ddpm = DDPM(min_beta=min_beta,max_beta=max_beta,N=N)
+        self.vae = VAE(**vae_config)
         self.criterion = nn.MSELoss()
         self.N = N 
         self.lr = lr 
@@ -71,6 +77,7 @@ class LightningImageDenoiser(pl.LightningModule):
         self.num_workers = num_workers
         self.scheduler = scheduler
         self.image_shape = image_shape
+
         self.sample_output_dir = sample_output_dir
         self.sample_epoch_interval = sample_epoch_interval
     def forward(self, batch):
@@ -82,7 +89,7 @@ class LightningImageDenoiser(pl.LightningModule):
         eps = torch.randn_like(images,device=images.device)
         x_t = self.ddpm.sample_forward(images, t, eps)
         # print(images.max(),images.min(),x_t.max(),x_t.min())
-        eps_theta = self.model(x_t, t.reshape(bs, 1))
+        eps_theta = self.denoiser(x_t, t.reshape(bs, 1))
         # print(t)
         # print("training ",eps.max(),x_t.max(),eps_theta.max())
         loss = self.criterion(eps,eps_theta)
@@ -122,13 +129,22 @@ class LightningImageDenoiser(pl.LightningModule):
         # Manually update the learning rate based on the scheduler
         if self.scheduler is not None:
             self.scheduler.step()  # Update the scheduler
+    
+    def AE_encode(self,x):
+        return self.vae.encode(x)
+    def AE_decode(self,x):
+        return self.vae.decode(x) 
             
+    def get_input(self,batch):
+        return self.AE_encode(batch)
+    
     def validation_step(self, batch, batch_idx):
         val_loss = self(batch)
         self.log('val_loss', val_loss, on_step=False, on_epoch=True, sync_dist=True, prog_bar=True)
         return val_loss 
     
     def training_step(self, batch, batch_idx):
+        batch = self.get_input(batch)
         loss = self(batch)
         self.log('train_loss', loss)
         self.log('learning_rate', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False)
@@ -138,13 +154,15 @@ class LightningImageDenoiser(pl.LightningModule):
     def sample_images(self, output_dir, n_sample=9, device="cuda", simple_var=True):
         max_batch_size = 32
         self.to(device)
-        self.model.eval()
+        self.denoiser.eval()
         os.makedirs(output_dir, exist_ok=True)
         with torch.no_grad():
             for i in range(0, n_sample, max_batch_size):
-                shape = (min(max_batch_size, n_sample - i),*self.image_shape)
-                imgs = self.ddpm.sample_backward(shape, self.model, device=device, simple_var=simple_var).detach().cpu()
-                print("in sample images: ",imgs.max(),imgs.min())
+                # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
+                shape = (min(max_batch_size, n_sample - i),*self.latent_shape)
+                latents = self.ddpm.sample_backward(shape, self.denoiser, device=device, simple_var=simple_var).detach().cpu()
+                imgs = self.AE_decoce(latents)
+                # print("in sample images: ",imgs.max(),imgs.min())
                 # imgs = (imgs + 1) / 2 * 255
                 # imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)#.numpy()
                 output_file = os.path.join(output_dir, "generated_images.png")
@@ -202,7 +220,7 @@ if __name__ == "__main__":
         data_module.prepare_data()
         data_module.setup()
 
-        model = LightningImageDenoiser(
+        model = LatentDiffusion(
             min_beta=args.min_beta,
             max_beta=args.max_beta,
             N = args.max_steps,
@@ -249,7 +267,7 @@ if __name__ == "__main__":
         paths = ["/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/linear_normal/model-epoch=1184-val_loss=0.00332.ckpt"]
         for path in paths:
             ckpt = os.path.basename(path).replace(".ckpt","")
-            model = LightningImageDenoiser(
+            model = LatentDiffusion(
                 min_beta=args.min_beta,
                 max_beta=args.max_beta,
                 N = args.max_steps,
