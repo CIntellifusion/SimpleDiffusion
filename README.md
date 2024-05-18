@@ -45,7 +45,7 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
   - [x] train on mnist 
 - [ ] diffusion on other latent space: text , audio , mesh , etc.
 
-## 实现计划
+## Implementation Plan
 
 基于`UnconditionalDiffusion/main.py`采用相同的dataset，类似的Trainer设置。但是将scheduler,models(unet,vit),和vae分开。 
 
@@ -55,7 +55,7 @@ VAE的部分follow其他实现，写成first_stage_condition。
 
 
 
-# Task 3Conditional Diffusion
+# Task 3 Conditional Diffusion
 
 - [ ] pretrained text model for condition
 - [ ] different condition type: vanilla , token , cross attention etc. 
@@ -70,6 +70,26 @@ VAE的部分follow其他实现，写成first_stage_condition。
 # Task 5 Video Diffusion
 
 - [ ] insert temporal layer into diffusion 
+
+
+
+# Other Resources for starting Diffusion
+
+[DDPM implementation1](https://zhuanlan.zhihu.com/p/617895786)
+
+[Course Level Diffusion Project: sast2023](https://github.com/Kevin-thu/sast2023-cv?tab=readme-ov-file)
+
+- provide a latent diffusion base on Pytorch Lightning
+- implement core functions yourself
+
+[DiffusionFastForward: Train Diffusion from scratch](https://github.com/mikonvergence/DiffusionFastForward)
+
+- provides some training costs record
+- some other resources 
+
+
+
+
 
 
 
