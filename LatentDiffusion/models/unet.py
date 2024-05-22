@@ -3,6 +3,7 @@
 
 import torch 
 from torch import nn
+from torch.nn import functional as F 
 
 class PositionalEncoding(nn.Module):
     def __init__(self, max_seq_len: int, d_model: int):

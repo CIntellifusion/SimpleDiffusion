@@ -1,3 +1,5 @@
+import torch 
+from torch import nn 
 
 ### DDIM scheduler
 class DDPM(nn.Module):
@@ -25,10 +27,11 @@ class DDPM(nn.Module):
     @torch.no_grad()
     def sample_backward(self, image_or_shape,net,device="cuda",simple_var=True):
         if isinstance(image_or_shape,torch.Tensor):
-            x = image_or_shape
+            x = image_or_shape.to(device)
         else:
             x = torch.randn(image_or_shape,device=device)
         # debug 
+        # print("sample_backward",x.device)
         # print(x.max(),x.min(),x.mean())
         # for t in range(self.N-1,-1,-1):
         #     self.sample_backward_step(net, x, t, simple_var)
@@ -48,7 +51,7 @@ class DDPM(nn.Module):
             else:
                 var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t]) * self.betas[t] 
             #这个地方还真写错了 randn_like和rand_like不一样wor
-            noise = torch.randn_like(x_t) * torch.sqrt(var)
+            noise = torch.randn_like(x_t,device=x_t.device) * torch.sqrt(var)
         eps = net(x_t,t_tensor)
         # with open("./cache.txt",'a') as f:
         #     f.write(f"{eps.mean().item()},{eps.max().item()},{eps.min().item()}\n")
