@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 import torch 
 from datasets import load_dataset
+imsize = 64 
 ### data
 class MNISTDataModule(pl.LightningDataModule):
     def __init__(self, data_dir="./", batch_size=64,num_workers=63):
@@ -62,12 +63,26 @@ class CelebDataModule(pl.LightningDataModule):
         return train_dataset, val_dataset
 
     def prepare_data(self):
-        self.dataset = load_dataset('nielsr/CelebA-faces')
-
+        self.dataset = load_dataset('nielsr/CelebA-faces')#.map(self.apply_transform)
+        # self.dataset = self.dataset.with_transform(self.apply_transform)
     def setup(self, stage=None, transform=None):
         if stage == 'fit' or stage is None:
             self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
-
+    @staticmethod
+    def collate_fn(batch):
+        # for example in batch:
+        #     image = example['image']
+        #     image.save("/home/haoyu/research/simplemodels/cache/test.jpg")
+        transform = transforms.Compose([
+            transforms.Resize((imsize,imsize)),  
+            transforms.ToTensor(),           
+            # transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
+            # transforms.Lambda(lambda x: (x - 0.5) * 2) # unconment 
+        ])
+        transformed_batch = torch.stack([transform(example['image']) for example in batch])
+        # print("transformerd",transformed_batch.mean(),transformed_batch.min(),transformed_batch.max())
+        
+        return transformed_batch,None
 
     def apply_transform(self, example):
         transform = transforms.Compose([
@@ -76,7 +91,7 @@ class CelebDataModule(pl.LightningDataModule):
             # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Normalize images
             # transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
         ])
-        return transform(example['image'])
+        return {"image":transform(example['image'])}
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
@@ -88,5 +103,6 @@ class CelebDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(self.val_dataset, 
                           batch_size=self.batch_size, 
-                          collate_fn=self.collate_fn, num_workers=self.num_workers,
+                          collate_fn=self.collate_fn, 
+                          num_workers=self.num_workers,
                           pin_memory=True)

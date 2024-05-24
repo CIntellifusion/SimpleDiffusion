@@ -14,59 +14,43 @@ from torchvision.utils import save_image, make_grid
 import pytorch_lightning as pl 
 import torch.optim as optim
 from data.data_wrapper import MNISTDataModule,CelebDataModule
+from models.ae_module import SimpleEncoder,SimpleDecoder
+from models.ae_module import Encoder,Decoder
 
-
-
-"""
-    A simple implementation of Gaussian MLP Encoder and Decoder
-"""
-
-class SimpleEncoder(nn.Module):
-    
-    def __init__(self, input_dim, hidden_dim, latent_dim):
-        super(SimpleEncoder, self).__init__()
-
-        self.FC_input = nn.Linear(input_dim, hidden_dim)
-        self.FC_input2 = nn.Linear(hidden_dim, hidden_dim)
-        self.FC_mean  = nn.Linear(hidden_dim, latent_dim)
-        self.FC_var   = nn.Linear (hidden_dim, latent_dim)
-        
-        self.LeakyReLU = nn.LeakyReLU(0.2)
-        
-        
-    def forward(self, x):
-        h_       = self.LeakyReLU(self.FC_input(x))
-        h_       = self.LeakyReLU(self.FC_input2(h_))
-        mean     = self.FC_mean(h_)
-        log_var  = self.FC_var(h_)                     # encoder produces mean and log of variance 
-                                                       #             (i.e., parateters of simple tractable normal distribution "q"
-        
-        return mean, log_var
-    
-    
-class SimpleDecoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, output_dim):
-        super(SimpleDecoder, self).__init__()
-        self.FC_hidden = nn.Linear(latent_dim, hidden_dim)
-        self.FC_hidden2 = nn.Linear(hidden_dim, hidden_dim)
-        self.FC_output = nn.Linear(hidden_dim, output_dim)
-        
-        self.LeakyReLU = nn.LeakyReLU(0.2)
-        
-    def forward(self, x):
-        h     = self.LeakyReLU(self.FC_hidden(x))
-        h     = self.LeakyReLU(self.FC_hidden2(h))
-        
-        x_hat = torch.sigmoid(self.FC_output(h))
-        return x_hat
-        
     
         
 class VAE(nn.Module):
-    def __init__(self, x_dim, hidden_dim, latent_dim,device):
+    def __init__(self, resolution,in_channels,device):
         super(VAE, self).__init__()
-        self.encoder = SimpleEncoder(input_dim=x_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
-        self.decoder = SimpleDecoder(latent_dim=latent_dim, hidden_dim=hidden_dim, output_dim=x_dim)
+        print("resolution:",resolution,"in_channels:",in_channels)
+        self.encoder = Encoder(
+                      ch=128,
+                      resolution=resolution,
+                      in_channels=in_channels,
+                      ch_mult=(1,2,4,8),
+                      num_res_blocks=2,
+                      attn_resolutions=(16,),
+                      dropout=0.0,
+                      resamp_with_conv=True,
+                      z_channels=128,
+                      double_z=False,
+                      use_linear_attn=False,
+                      use_checkpoint=False)
+        self.decoder = Decoder(ch=128,
+                      out_ch=in_channels,
+                      resolution=resolution,
+                      in_channels=in_channels,
+                      ch_mult=(1,2,4,8),
+                      num_res_blocks=2,
+                      attn_resolutions=(16,),
+                      dropout=0.0,
+                      resamp_with_conv=True,
+                      z_channels=128,
+                      give_pre_end=False,   
+                      tanh_out=False,
+                      use_linear_attn=False,
+                      use_checkpoint=False)
+        
         self.device = device
     
     def reparameterization(self, mean, var):
@@ -76,11 +60,15 @@ class VAE(nn.Module):
     
     def encode(self,x):
         mean, log_var = self.encoder(x)
+        # print("reparameter: ",mean.shape,log_var.shape,x.shape);
         z = self.reparameterization(mean, torch.exp(0.5 * log_var))
+        # print("z latent:", z.shape);exit()
         return z
     def decode(self,z):
         return self.decoder(z)
-                
+    
+    def sample(self,n_sample):
+        self.decoder.sample(n_sample)
     def forward(self, x):
         mean, log_var = self.encoder(x)
         z = self.reparameterization(mean, torch.exp(0.5 * log_var)) # takes exponential function (log var -> var)
@@ -89,9 +77,17 @@ class VAE(nn.Module):
         return x_hat, mean, log_var
 
     def loss_fn(self,x, x_hat, mean, log_var):
+        # print("loss fn",x.shape,x_hat.shape,log_var.shape,mean.shape)
+        x = x.view(x.shape[0],-1)
+        x_hat = x_hat.view(x_hat.shape[0],-1)
+        log_var = log_var.view(log_var.shape[0],-1)
+        mean = mean.view(mean.shape[0],-1)
+        # print("loss fn",x.shape,x_hat.shape,log_var.shape,mean.shape);#exit()
+        # print("x max min",x.max(),x.min(),x_hat.max(),x_hat.min());exit()
         reproduction_loss = nn.functional.binary_cross_entropy(x_hat, x, reduction='sum')
         KLD      = - 0.5 * torch.sum(1+ log_var - mean.pow(2) - log_var.exp())
         return reproduction_loss + KLD
+        # return KLD 
 
 
 class VAETrainer(pl.LightningModule):
@@ -104,10 +100,10 @@ class VAETrainer(pl.LightningModule):
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
+                 device = "cuda"
                  ):
         super(VAETrainer, self).__init__()
-        self.model = VAE(x_dim=x_dim, hidden_dim=hidden_dim, latent_dim=latent_dim)
-        self.lr = lr
+        self.model = VAE(resolution=imsize,in_channels=channels,device=device)
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
         self.lr = lr 
@@ -121,7 +117,7 @@ class VAETrainer(pl.LightningModule):
 
     def forward(self, batch):
         x, _ = batch
-        x = x.view(self.batch_size, x_dim)
+        # x = x.view(self.batch_size, x_dim)
         x_hat, mean, log_var = self.model(x) 
         loss = self.model.loss_fn(x, x_hat, mean, log_var)
         return loss
@@ -145,8 +141,8 @@ class VAETrainer(pl.LightningModule):
     def sample_images(self, output_dir, n_sample=10, device="cuda", simple_var=True):
         output_file =  os.path.join(output_dir , "generated_images.png")
         with torch.no_grad():
-            noise = torch.randn(n_sample, latent_dim)#.to(DEVICE)
-            generated_images = self.model.decoder(noise)
+            # noise = torch.randn(n_sample, latent_dim)#.to(DEVICE)
+            generated_images = self.model.sample(n_sample)
             save_image(generated_images.view(n_sample,*self.image_shape),output_file, nrow=5, normalize=True)
     
     def on_train_epoch_end(self):
@@ -161,17 +157,18 @@ class VAETrainer(pl.LightningModule):
 
 if __name__=="__main__":
     dataset_path = '../data'
-    data_module = MNISTDataModule(data_dir=dataset_path, batch_size=100, num_workers=63)
+    imsize = 64
+    batch_size = 64
+    # data_module = MNISTDataModule(data_dir=dataset_path, batch_size=100, num_workers=63)
+    data_module = CelebDataModule(batch_size=batch_size,
+                        num_workers=63,imsize=imsize)
     cuda = True
     DEVICE = torch.device("cuda" if cuda else "cpu")
-    x_dim  = 784
-    hidden_dim = 400
-    latent_dim = 784
     lr = 1e-3
-    epochs = 100
-    sample_epoch_interval = 10
-    sample_output_dir = "./samples"
-    expname = "vae"
+    epochs = 40
+    sample_epoch_interval = 1
+    sample_output_dir = "./sample_vae"
+    expname = "vae_aemodule_celeb64"
     from pytorch_lightning.callbacks import ModelCheckpoint
     checkpoint_callback = ModelCheckpoint(
     dirpath=f"./checkpoints/{expname}",  # 保存 checkpoint 的目录
@@ -182,17 +179,21 @@ if __name__=="__main__":
     verbose=True
     )
     pretrain_path = "/home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae/model-epoch=38-val_loss=10231.90039.ckpt"
-    model = VAETrainer(batch_size=100,
-                                 lr=lr,imsize=28,
-                                 num_workers=63,
-                                 sample_output_dir=sample_output_dir,
-                                 sample_epoch_interval=sample_epoch_interval)
+    pretrain_path = None 
+    model = VAETrainer(batch_size=batch_size,
+                        channels=3,
+                        lr=lr,imsize=imsize,
+                        num_workers=63,
+                        sample_output_dir=sample_output_dir,
+                        sample_epoch_interval=sample_epoch_interval)
     
-    trainer = pl.Trainer(gpus=1 if cuda else 0,
-                         max_epochs=epochs,
-                         logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
-                         callbacks=[checkpoint_callback],
-                         )
+    trainer = pl.Trainer(
+                        accelerator = "gpu",
+                        devices=1,
+                        max_epochs=epochs,
+                        logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
+                        callbacks=[checkpoint_callback],
+                        )
     
     trainer.fit(model=model,datamodule=data_module,ckpt_path=pretrain_path)
 
