@@ -61,17 +61,20 @@ class LatentDiffusion(pl.LightningModule):
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
-                 vae_config = {"x_dim":784,'hidden_dim':400,"latent_dim":784,"device":"cuda:0"},
+                 unet_config = {"channels":[10, 20, 40 ,80],"pe_dim":100,"with_attns":True},
+                 vae_config = {"resolution":64,'in_channels':3,"device":"cuda:0"},
                  vae_pretrained_path = None
                  ):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
         #TODO: latent shape 
-        self.latent_shape = [vae_config["latent_dim"]] 
-        self.denoiser = UNet( n_steps=N, image_shape=image_shape)
         self.ddpm = DDPM(min_beta=min_beta,max_beta=max_beta,N=N)
         self.vae = VAE(**vae_config)
+        self.latent_shape = self.vae.decoder.z_shape[1:]
+        self.denoiser = UNet(n_steps=N, 
+                             latent_shape=self.latent_shape,
+                             **unet_config)
         self.vae_config = vae_config
         self.config_vae(vae_pretrained_path)
         self.criterion = nn.MSELoss()
@@ -138,8 +141,8 @@ class LatentDiffusion(pl.LightningModule):
     def AE_encode(self,x):
         # x = torch.concat(x)
         # print("AE_encode",x.shape)# [128, 1, 28, 28]
-        bs = x.shape[0]
-        x = x.view(bs, *self.latent_shape)
+        # bs = x.shape[0]
+        # x = x.view(bs, *self.latent_shape)
         return self.vae.encode(x) # encoder posterior ; tensor 
     
     def AE_decode(self,x):
@@ -153,9 +156,9 @@ class LatentDiffusion(pl.LightningModule):
         # print(batch)
         latents = batch 
         bs = latents.shape[0]
-        # print("forward ae encode output",latents.shape)
-        latents = latents.reshape(bs,*self.image_shape)
-        # print(latents.shape)
+        # print("forward ae encode shape",latents.shape)
+        # latents = latents.reshape(bs,*self.latent_shape)
+        # print("forward ae reshaped encode shape",latents.shape)
 
         t = torch.randint(0,self.N,(bs,),device = latents.device)
         eps = torch.randn_like(latents,device=latents.device)
@@ -190,11 +193,11 @@ class LatentDiffusion(pl.LightningModule):
             for i in range(0, n_sample, max_batch_size):
                 # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
                 bs = min(max_batch_size, n_sample - i)
-                shape = (bs,*self.image_shape)
+                shape = (bs,*self.latent_shape)
                 latents = self.ddpm.sample_backward(shape, self.denoiser, device=device, simple_var=simple_var)
                 imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
                 
-                # print("in sample images: ",imgs.max(),imgs.min())
+                print("in sample images: ",imgs.max(),imgs.min())
                 # imgs = (imgs + 1) / 2 * 255
                 # imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)#.numpy()
                 output_file = os.path.join(output_dir,name )
@@ -230,7 +233,7 @@ def parse_args():
     parser.add_argument('--min_beta', type=float, default=0.0001, help='Minimum value of beta for DDPM')
     parser.add_argument('--max_beta', type=float, default=0.02, help='Maximum value of beta for DDPM')
     parser.add_argument('--max_step', type=int, default=1000, help='Number of steps (N) for DDPM')
-    parser.add_argument('--lr', type=float, default=0.001, help='Learning rate for optimizer')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
     parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for training')
     parser.add_argument('--num_workers', type=int, default=63, help='num_workers training data loader')
     parser.add_argument('--channels', type=int, default=3, help='channels of image ')
@@ -243,6 +246,10 @@ def parse_args():
 
     return args
 
+#python main.py  --train --expname ldm_celeb64 --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_aemodule_celeb64_halftiny/model-epoch=38-val_loss=397428.12500.ckpt
+#python main.py  --train --expname ldm_celeb64 --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
+#python main.py  --train --expname ldm_celeb64_unetmid --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
+#python main.py  --train --expname ldm_celeb64_unetlarget --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
 if __name__ == "__main__":
     args = parse_args()
     expname = args.expname
@@ -260,7 +267,11 @@ if __name__ == "__main__":
             raise NotImplementedError("Not supported dataset")
         data_module.prepare_data()
         data_module.setup()
-
+        default_unet_config = {"channels":[64,128,128,64],
+                   "pe_dim":100,
+                   "with_attns":True,
+                   "norm_type":"ln"
+                   }
         model = LatentDiffusion(
             min_beta=args.min_beta,
             max_beta=args.max_beta,
@@ -273,7 +284,8 @@ if __name__ == "__main__":
             scheduler=args.scheduler,
             sample_output_dir=f"./sample/{expname}",
             sample_epoch_interval=args.sample_epoch_interval,
-            vae_pretrained_path = args.vae_ckpt
+            vae_pretrained_path = args.vae_ckpt,
+            unet_config=default_unet_config
             )
 
         # 设置保存 checkpoint 的回调函数
@@ -287,6 +299,7 @@ if __name__ == "__main__":
         )
         
         pretrain_path = None 
+        # pretrain_path = "/home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/ldm_celeb64/model-epoch=07-val_loss=0.77585.ckpt" 
         trainer = pl.Trainer(
             accelerator="gpu",
             devices=args.devices,                    # 使用一块 GPU 进行训练

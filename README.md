@@ -29,7 +29,7 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
 
 ## Engineer Issues
 
-关于工程抽象程度和实现设计的说明
+### 关于工程抽象程度和实现设计的说明
 
 本项目在不同的任务中会采用不同的设计方式，由任务复杂度和任务需求决定。 不同的抽象(解耦)程度会影响代码可读性，可维护性，可扩展性，以及工程效率。 我们常常需要再这些方面做权衡(trade-off)。
 
@@ -40,10 +40,21 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
 在之后的实现中，会继续增加抽象程度，目前在计划中的抽象是:
     1. 增加`config.yaml`用来取代命令行传参
     2. 利用`importlib` +`omega_conf` 来简化类初始化。 参考VideoCrafter的实现。这样的好处会在实现之后详细说明。 
-   
+
 在分析了相对大量的工程文件和Toturial之后，注意到了一个被忽略的问题： **对实验结果的聚合和分析**
     1. 不同实验的代码的自动保存  
-    2. 不同`config`下结果的自动化分析
+        2. 不同`config`下结果的自动化分析
+
+### 关于超参数修改
+
+1. 改超参数之前最好进行backup 尤其是进程并行的时候
+
+
+
+### 自动搜索超参数的脚本
+
+1. 依赖于被良好解耦的config
+2. 然后设置好不同的config ->自动分配显卡资源等等 
 
 
 # Task 2 Latent Diffusion
@@ -63,7 +74,13 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
 
 ### result on celeb64 
 
-- [ ] training 
+
+
+![vae_half_tiny](README/vae_half_tiny.gif)![vae_half_tiny](README/vae_half_tiny.gif)![tiny_epoch40](README/tiny_epoch40.png)
+
+## Full results of ldm on celeb
+
+![unetlarge_celeb](README/unetlarge_celeb.png)
 
 ## Implementation Plan
 
@@ -74,6 +91,13 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
 Trainer里面要增加encode和decode的部分。 扩散的过程中，只是特征空间变了，其他的不变。 
 
 VAE的部分follow其他实现，写成first_stage_condition。 
+
+
+
+
+
+- 这个VAE结果还不够好，对于高频特征的重建比较差，需要加LPIPS和Discrimintor。
+- config等配置问题还需要更加规范  代码还需要整理
 
 
 

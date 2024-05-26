@@ -40,11 +40,12 @@ def images2gif(image_files:list,save_path:str):
 
 if __name__=="__main__":
     
-    folder = "./LatentDiffusion/samples/"
+    folder = "./LatentDiffusion/sample/sample_vae_tiny"
     # folder = "./sample/randn/"
     # name = "0000_0008.png"
     name = "generated_images.png"
     subfolders = sorted(os.listdir(folder))
+    
     # for sf in subfolders:
     #     os.system(f"mv {os.path.join(folder,sf)} {os.path.join(folder,f'{int(sf):05d}')}")
     # subfolders = sorted(os.listdir(folder))

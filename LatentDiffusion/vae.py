@@ -20,11 +20,13 @@ from models.ae_module import Encoder,Decoder
     
         
 class VAE(nn.Module):
-    def __init__(self, resolution,in_channels,device):
+    def __init__(self, resolution,in_channels,
+                 z_channels =16 ,
+                 device="cuda"):
         super(VAE, self).__init__()
         print("resolution:",resolution,"in_channels:",in_channels)
         self.encoder = Encoder(
-                      ch=128,
+                      ch=16,
                       resolution=resolution,
                       in_channels=in_channels,
                       ch_mult=(1,2,4,8),
@@ -32,11 +34,11 @@ class VAE(nn.Module):
                       attn_resolutions=(16,),
                       dropout=0.0,
                       resamp_with_conv=True,
-                      z_channels=128,
+                      z_channels=z_channels,
                       double_z=False,
                       use_linear_attn=False,
                       use_checkpoint=False)
-        self.decoder = Decoder(ch=128,
+        self.decoder = Decoder(ch=16,
                       out_ch=in_channels,
                       resolution=resolution,
                       in_channels=in_channels,
@@ -45,7 +47,7 @@ class VAE(nn.Module):
                       attn_resolutions=(16,),
                       dropout=0.0,
                       resamp_with_conv=True,
-                      z_channels=128,
+                      z_channels=z_channels,
                       give_pre_end=False,   
                       tanh_out=False,
                       use_linear_attn=False,
@@ -68,7 +70,7 @@ class VAE(nn.Module):
         return self.decoder(z)
     
     def sample(self,n_sample):
-        self.decoder.sample(n_sample)
+        return self.decoder.sample(n_sample)
     def forward(self, x):
         mean, log_var = self.encoder(x)
         z = self.reparameterization(mean, torch.exp(0.5 * log_var)) # takes exponential function (log var -> var)
@@ -144,7 +146,11 @@ class VAETrainer(pl.LightningModule):
             # noise = torch.randn(n_sample, latent_dim)#.to(DEVICE)
             generated_images = self.model.sample(n_sample)
             save_image(generated_images.view(n_sample,*self.image_shape),output_file, nrow=5, normalize=True)
-    
+    def on_fit_start(self):
+        output_dir = os.path.join(self.sample_output_dir, f'init_ckpt')
+        os.makedirs(output_dir,exist_ok=True)
+        self.sample_images(output_dir=output_dir,n_sample=25,device="cuda",simple_var=True)    
+
     def on_train_epoch_end(self):
         if (self.current_epoch+1) % self.sample_epoch_interval==0:
             print(f"sampling {self.current_epoch}/{self.sample_epoch_interval},")
@@ -167,8 +173,8 @@ if __name__=="__main__":
     lr = 1e-3
     epochs = 40
     sample_epoch_interval = 1
-    sample_output_dir = "./sample_vae"
-    expname = "vae_aemodule_celeb64"
+    expname = "vae_celeb64_ch16_outz16"
+    sample_output_dir = f"./sample/{expname}"
     from pytorch_lightning.callbacks import ModelCheckpoint
     checkpoint_callback = ModelCheckpoint(
     dirpath=f"./checkpoints/{expname}",  # 保存 checkpoint 的目录
@@ -179,7 +185,9 @@ if __name__=="__main__":
     verbose=True
     )
     pretrain_path = "/home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae/model-epoch=38-val_loss=10231.90039.ckpt"
-    pretrain_path = None 
+    pretrain_folder = "./checkpoints/vae_aemodule_celeb64/" 
+    pretrain_path = os.path.join(pretrain_folder,"model-epoch=01-val_loss=406142.43750.ckpt") 
+    pretrain_path=None 
     model = VAETrainer(batch_size=batch_size,
                         channels=3,
                         lr=lr,imsize=imsize,

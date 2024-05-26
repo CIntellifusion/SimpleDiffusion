@@ -32,7 +32,7 @@ def create_norm(type, shape):
     if type == 'ln':
         return nn.LayerNorm(shape)
     elif type == 'gn':
-        return nn.GroupNorm(32, shape[0])
+        return nn.GroupNorm(16, shape[0])
 
 
 def create_activation(type):
@@ -177,23 +177,26 @@ class UNet(nn.Module):
 
     def __init__(self,
                  n_steps,
-                 image_shape,
+                 latent_shape,
                  channels=[10, 20, 40, 80],
                  pe_dim=10,
                  with_attns=False,
                  norm_type='ln',
-                 activation_type='silu'):
+                 activation_type='silu',
+                 num_res_block=2):
         super().__init__()
-        C, H, W = image_shape
+        C, H, W = latent_shape
         layers = len(channels)
         Hs = [H]
         Ws = [W]
         cH = H
         cW = W
-        self.NUM_RES_BLOCK = 2
+        self.NUM_RES_BLOCK = num_res_block
         for _ in range(layers - 1):
             cH //= 2
             cW //= 2
+            if cH==0 or cW ==0:
+                raise ValueError(f"invalid channel config, to many down sample layers {channels}, and feature will be {cH}*{cW}")
             Hs.append(cH)
             Ws.append(cW)
         if isinstance(with_attns, bool):
@@ -250,20 +253,21 @@ class UNet(nn.Module):
 
             prev_channel = channel
 
-        self.conv_in = nn.Conv2d(C, channels[0], 3, 1, 1)
-        self.conv_out = nn.Conv2d(prev_channel, C, 3, 1, 1)
+        self.conv_in = nn.Conv2d(C, channels[0], kernel_size = 3, stride = 1, padding = 1)
+        self.conv_out = nn.Conv2d(prev_channel, C, kernel_size = 3, stride = 1, padding = 1)
         self.activation = create_activation(activation_type)
 
     def forward(self, x, t):
         t = self.pe(t)
         pe = self.pe_linears(t)
-
+        # print("in unet x",x.shape)
         x = self.conv_in(x)
-
+        # print("in unet conv_in",x.shape)
         encoder_outs = []
-        for encoder, down in zip(self.encoders, self.downs):
+        for encoder, down, encidx in zip(self.encoders, self.downs,range(len(self.encoders))):
             tmp_outs = []
             for index in range(self.NUM_RES_BLOCK):
+                # print(f"encoder {encidx} {index}",x.shape)
                 x = encoder[index](x, pe)
                 tmp_outs.append(x)
             tmp_outs = list(reversed(tmp_outs))
@@ -289,6 +293,31 @@ class UNet(nn.Module):
 
 if __name__=="__main__":
     ### unit tests : python unet.py 
+    ### for large unet 
+    latent_shape = [32,8,8]
+    bs = 2
+    latents = torch.randn(bs,*latent_shape)
+    unet_config = {"channels":[64,128,64,32],
+                   "pe_dim":100,
+                   "with_attns":True,
+                   "norm_type":"ln"
+                   }
+    print("[unit test 3]:  channel test:")
+    model = UNet(1000,latent_shape,**unet_config)
+    ### for latent test 
+    latent_shape = [32,8,8]
+    bs = 2
+    latents = torch.randn(bs,*latent_shape)
+    t = torch.randint(0,1000,(bs,),device = latents.device)
+    eps = torch.randn_like(latents,device=latents.device)
+    output = model(latents,t)
+    print("unet test",output.shape)
+    exit()
+    print("[unit test 2]: latent shape test:")
+    model = UNet(1000,latent_shape)
+    t = torch.randint(0,1000,(bs,),device = latents.device)
+    eps = torch.randn_like(latents,device=latents.device)
+    ### unit tests : python unet.py 
     image_shape = [3,64,64]
     out_dim = 3
     print("[unit test 1]: attention test:")
@@ -301,3 +330,4 @@ if __name__=="__main__":
     output = attnblock(x)
     print("input:",x.shape,x.mean(),x.std(),x.max())
     print("output:",output.shape,output.mean(),output.std(),output.max())
+    

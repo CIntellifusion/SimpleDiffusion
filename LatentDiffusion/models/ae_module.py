@@ -50,7 +50,7 @@ class SimpleDecoder(nn.Module):
     A more complex implementation of Resnet Encoder with Attention
     reference: lvdm/moddules/ae_modules.py
 """
-def Normalize(in_channels,num_groups=32):
+def Normalize(in_channels,num_groups=16):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-5)
 
 def nonlinearity(x):
@@ -451,7 +451,7 @@ class Decoder(nn.Module):
             h = torch.sigmoid(h)
         return h
     def sample(self,n_sample):
-        z = torch.randn(n_sample,*self.z_shape[1:])
+        z = torch.randn(n_sample,*self.z_shape[1:],device=self.conv_in.weight.device)
         return self.forward(z)
 
 
