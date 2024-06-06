@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "simplediffusion"
+version = "0.1.0"
+description = ""
+#authors = ["Your Name <you@example.com>"]
+license = "MIT"
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.13"
+pytorch-lightning = "^1.8.3"
+torchmetrics = "^0.11.4"
+datasets = "^2.18.0"
+transformers = "4.30.2"
+diffusers = "^0.20.0"
+torch = { version = "2.0.1", source="torch"}
+torchvision = { version = "0.15.2", source="torch"}
+opencv-python = "^4.9.0.80"
+tensorboard = "^2.16.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "torch"
+url = "https://download.pytorch.org/whl/cu118/"
+priority = "supplemental"
+
+
+[[tool.poetry.source]]
+name = "mirrors"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+priority = "primary"
