@@ -2,7 +2,7 @@
 
 (pkgs.mkShell rec {
 
-  buildInputs = (with pkgs; [ python39 poetry gcc gnumake zsh zlib libGL glib]);
+  buildInputs = (with pkgs; [ python39 poetry gcc gnumake zlib libGL glib]);
 
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc];
 
