@@ -737,7 +737,7 @@ if __name__ == "__main__":
             data_module = CelebDataModule(batch_size=args.batch_size,
                                           num_workers=args.num_workers,imsize=args.imsize)
         elif dataset=="mnist":
-            data_module = MNISTDataModule(data_dir="/home/haoyu/research/simplemodels/data", 
+            data_module = MNISTDataModule(data_dir="path/to/mnist/data", 
                                           batch_size=args.batch_size,num_workers=args.num_workers)
         elif dataset=="image":
             data_module = ImageDataModule(data_dir=args.datapath, 
@@ -782,10 +782,10 @@ if __name__ == "__main__":
 
         trainer.fit(model,data_module,ckpt_path = pretrain_path)
     else:
+        # you may modify your checkpoint path below 
         ckpt_folder = f"./checkpoints/{expname}"
         paths = os.listdir(ckpt_folder)
         paths = [os.path.join(ckpt_folder,i) for i in paths]
-        paths = ["/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/linear_normal/model-epoch=1184-val_loss=0.00332.ckpt"]
         for path in paths:
             ckpt = os.path.basename(path).replace(".ckpt","")
             model = LightningImageDenoiser(

@@ -13,7 +13,7 @@ Compare the result with papers.
 
 - [x] Implement a DDPM and DDIM
 
-- [x] Training On Mnist 
+- [x] Training result On Mnist 
 
 ![mnist_200epoch](README/mnist_200epoch.gif)
 
@@ -24,6 +24,31 @@ Compare the result with papers.
 - [x] Scalable Unet to 128 - 256 - 512; refer to task2 
 
 for further details please refer to `./UnoncditionalDiffusion/experiments.pptx`  and `./UnoncditionalDiffusion/experiments.md` 
+
+
+
+## 1.1 Train on mnist 
+
+```
+cd UnconditionalDiffusion
+python main.py --train --dataset mnist --batch_size=128 --imsize=32
+```
+
+## 1.2 Generation on mnist
+
+```
+# modify ckpt path in the ~ line 785
+python main.py 
+```
+
+
+
+## 1.3 Train on Celeba
+
+```
+cd UnconditionalDiffusion
+python main.py --train ---batch_size=128 --imsize=32
+```
 
 
 
@@ -64,6 +89,8 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
   - [x] train on mnist 
   - [x] large scalable ae module
   - [x] attention in ae 
+  - [ ] config for training 
+  - [ ] lpips and discriminator loss
 - [ ] diffusion on other latent space: text , audio , mesh , etc.
 
 ## VAE results 
@@ -76,11 +103,13 @@ for further details please refer to `./UnoncditionalDiffusion/experiments.pptx` 
 
 
 
-![vae_half_tiny](README/vae_half_tiny.gif)![vae_half_tiny](README/vae_half_tiny.gif)![tiny_epoch40](README/tiny_epoch40.png)
+![vae_half_tiny](README/vae_tiny.gif)![vae_half_tiny](README/vae_half_tiny.gif)![tiny_epoch40](README/tiny_epoch40.png)
 
 ## Full results of ldm on celeb
 
 ![unetlarge_celeb](README/unetlarge_celeb.png)
+
+![unet_large](README/unet_large.gif)![unet_mid](README/unet_mid.gif)
 
 ## Implementation Plan
 
@@ -94,8 +123,6 @@ VAE的部分follow其他实现，写成first_stage_condition。
 
 
 
-
-
 - 这个VAE结果还不够好，对于高频特征的重建比较差，需要加LPIPS和Discrimintor。
 - config等配置问题还需要更加规范  代码还需要整理
 
@@ -103,19 +130,32 @@ VAE的部分follow其他实现，写成first_stage_condition。
 
 # Task 3 Conditional Diffusion
 
+- [ ] classifier guidance and classifier-free guidance 
 - [ ] pretrained text model for condition
 - [ ] different condition type: vanilla , token , cross attention etc. 
 - [ ] multiple condition : zero-conv(controlnet)
 
+
+
+## Implementation Plan
+
+[classifier guidance simple tutorial](https://zhuanlan.zhihu.com/p/639548962)
+
+- [ ] mnist的数据集可以做分类标签-扩展数据集部分的代码
+- [ ] text2image的数据集
+- [ ] 
+
 # Task 4 Diffusion Transformer
 
 - [ ] replace Unet with a transformer 
+- [ ] 
 
 
 
-# Task 5 Video Diffusion
+# Task 5  Video Diffusion
 
 - [ ] insert temporal layer into diffusion 
+- [ ] temporal and spatial attention 
 
 
 
