@@ -1,0 +1,28 @@
+name: Ruff Check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: DeterminateSystems/nix-installer-action@main
+      with:
+        extra-conf: |
+          accept-flake-config = true
+    - uses: DeterminateSystems/magic-nix-cache-action@main
+    - uses: DeterminateSystems/flake-checker-action@main
+    - name: Checkout Project
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 2
+        lfs: true
+    - name: Install dependencies
+      run: |
+        nix shell "nixpkgs#python3" "nixpkgs#poetry"
+        poetry install
+    - name: Analysing the code with ruff
+      run: |
+        make check

@@ -39,5 +39,5 @@
         config.allowUnfree = true;
         config.cudaSupport = true;
       };
-    in { devShells.${system}.default = import ./shell.nix { inherit pkgs; }; };
+    in { devShells.${system}.default = import ./nix/shell.nix { inherit pkgs; }; };
 }
