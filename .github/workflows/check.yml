@@ -21,7 +21,7 @@ jobs:
         lfs: true
     - name: Install dependencies
       run: |
-        nix shell "nixpkgs#python3" "nixpkgs#poetry"
+        nix shell "nixpkgs#poetry"
         poetry install
     - name: Analysing the code with ruff
       run: |
