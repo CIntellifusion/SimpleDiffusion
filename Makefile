@@ -4,10 +4,10 @@
 init:
 	poetry install
 
-check:
+check: init
 	poetry run ruff check
 
-fmt:
+fmt: init
 	poetry run ruff format
 
 train-mnist-cpu: init

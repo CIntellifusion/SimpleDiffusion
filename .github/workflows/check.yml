@@ -19,10 +19,7 @@ jobs:
       with:
         fetch-depth: 2
         lfs: true
-    - name: Install dependencies
+    - name: Install dependencies and Run check
       run: |
-        nix shell "nixpkgs#poetry"
-        poetry install
-    - name: Analysing the code with ruff
-      run: |
-        make check
+        nix develop --command make check
+
