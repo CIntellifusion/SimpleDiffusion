@@ -9,6 +9,12 @@ Compare the result with papers.
 
 > we don’t understand what we can’t create. 
 
+
+
+**Notice: This repo is under heavy development.**
+
+
+
 # Task 1 Unconditional Diffusion
 
 - [x] Implement a DDPM and DDIM
@@ -93,6 +99,21 @@ python main.py --train ---batch_size=128 --imsize=32
   - [ ] lpips and discriminator loss
 - [ ] diffusion on other latent space: text , audio , mesh , etc.
 
+
+
+## 2.1 Train Latent DIffusion
+
+```shell
+#step 1 
+python vae.py -b configs/train_vae.yaml
+#step 2
+#note: please add the path of pretrained vae to config 
+#and also specify l
+python main.py -b configs/train_ldm.yaml
+```
+
+
+
 ## VAE results 
 
 ### result on mnist 
@@ -172,6 +193,12 @@ VAE的部分follow其他实现，写成first_stage_condition。
 
 - provides some training costs record
 - some other resources 
+
+
+
+# Acknowledgements
+
+- thanks timechess (https://github.com/timechess) for adding nix and poetry environment in this project.
 
 
 
