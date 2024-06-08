@@ -339,7 +339,8 @@ class Decoder(nn.Module):
                  resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
                  attn_type="vanilla", **ignorekwargs):
         super().__init__()
-        if use_linear_attn: attn_type = "linear"
+        if use_linear_attn : 
+            attn_type = "linear"
         self.ch = ch
         self.temb_ch = 0
         self.num_resolutions = len(ch_mult)
@@ -352,7 +353,7 @@ class Decoder(nn.Module):
         
         
         # compute 
-        in_ch_mult = (1,)+tuple(ch_mult)
+        # in_ch_mult = (1,)+tuple(ch_mult)
         block_in = ch*ch_mult[self.num_resolutions-1]
         curr_res = resolution // 2**(self.num_resolutions-1)
         self.z_shape = (1,z_channels,curr_res,curr_res)
