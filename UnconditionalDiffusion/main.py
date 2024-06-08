@@ -19,13 +19,13 @@ import numpy as np
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.utils import save_image, make_grid
 
-## sorry to use global value 
-imsize = 32 
-""" 
+## sorry to use global value
+imsize = 32
+"""
 an simple overview of the code structure
-for a diffusion generator , we need to define: 
-1. denoise network 
-2. mnist data and 
+for a diffusion generator , we need to define:
+1. denoise network
+2. mnist data and
 3. DDIM scheduler
 4. pytorch lightning trainer
 
@@ -34,14 +34,14 @@ during the training process:
 2. the diffusion scheduler receive x_t and x_{t+1} and predict q(t,x)
 
 during the inference stage:
-1. start from a noise or an input image as x_t 
+1. start from a noise or an input image as x_t
 2. predict x_t-1
 3. update x_t = x_t-1
 4. repeat until reach the target timestep
 """
 
 
-### Unet 2D denoise network 
+### Unet 2D denoise network
 ### borrowed from https://github.com/SingleZombie/DL-Demos/blob/master/dldemos/ddim/network.py
 
 class PositionalEncoding(nn.Module):
@@ -352,12 +352,12 @@ class MNISTDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None,transform=None):
         # This method is called on every GPU in the distributed setup and should split the data
-        if transform is None : 
+        if transform is None :
             transform = transforms.Compose([
                 transforms.ToTensor(),
-                # transforms.Normalize((0.1307,), (0.3081,)) # 
+                # transforms.Normalize((0.1307,), (0.3081,)) #
             ])
-        
+
         if stage == 'fit' or stage is None:
             self.train_dataset = MNIST(self.data_dir, train=True, transform=transform)
             self.val_dataset = MNIST(self.data_dir, train=False, transform=transform)
@@ -374,7 +374,7 @@ class CelebDataModule(pl.LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.imsize = args.imsize 
+        self.imsize = args.imsize
     def split_dataset(self, dataset, split_ratio=0.2):
         """
         Divides the dataset into training and validation sets.
@@ -407,10 +407,10 @@ class CelebDataModule(pl.LightningDataModule):
         #     image = example['image']
         #     image.save("/home/haoyu/research/simplemodels/cache/test.jpg")
         transform = transforms.Compose([
-            transforms.Resize((imsize,imsize)),  
-            transforms.ToTensor(),           
+            transforms.Resize((imsize,imsize)),
+            transforms.ToTensor(),
             # transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
-            # transforms.Lambda(lambda x: (x - 0.5) * 2) # unconment 
+            # transforms.Lambda(lambda x: (x - 0.5) * 2) # unconment
         ])
         transformed_batch = torch.stack([transform(example['image']) for example in batch])
         # print("transformerd",transformed_batch.mean(),transformed_batch.min(),transformed_batch.max())
@@ -418,14 +418,14 @@ class CelebDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
-                          batch_size=self.batch_size, 
-                          collate_fn=self.collate_fn, 
+                          batch_size=self.batch_size,
+                          collate_fn=self.collate_fn,
                           shuffle=True, num_workers=self.num_workers,
                           pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, 
-                          batch_size=self.batch_size, 
+        return DataLoader(self.val_dataset,
+                          batch_size=self.batch_size,
                           collate_fn=self.collate_fn, num_workers=self.num_workers,
                           pin_memory=True)
 
@@ -434,7 +434,7 @@ class ImageDataModule(pl.LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.imsize = args.imsize 
+        self.imsize = args.imsize
     def split_dataset(self, dataset, split_ratio=0.2):
         """
         Divides the dataset into training and validation sets.
@@ -456,24 +456,24 @@ class ImageDataModule(pl.LightningDataModule):
 
     def prepare_data(self,imagepath=None):
         transform = transforms.Compose([
-            transforms.Resize((imsize,imsize)),  
-            transforms.ToTensor(),           
+            transforms.Resize((imsize,imsize)),
+            transforms.ToTensor(),
         ])
         self.dataset = ImageFolder(imagepath,transform=transform)
 
     def setup(self, stage=None):
         if stage == 'fit' or stage is None:
             self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
-        
+
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
-                          batch_size=self.batch_size, 
+                          batch_size=self.batch_size,
                           shuffle=True, num_workers=self.num_workers,
                           pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, 
-                          batch_size=self.batch_size, 
+        return DataLoader(self.val_dataset,
+                          batch_size=self.batch_size,
                           num_workers=self.num_workers,
                           pin_memory=True)
 ### DDIM scheduler
@@ -491,21 +491,21 @@ class DDPM(nn.Module):
         self.register_buffer("alpha_bars_prev", alpha_bars_prev)
         self.register_buffer("betas", betas)
         self.N = N
-        
+
     def sample_forward(self,x,t,eps=None):
         alpha_bar = self.alpha_bars[t].reshape(-1,1,1,1)
         if eps is None:
             eps = torch.randn_like(x)
         result = eps * torch.sqrt(1-alpha_bar) + torch.sqrt(alpha_bar)*x
         return result
-        
+
     @torch.no_grad()
     def sample_backward(self, image_or_shape,net,device="cuda",simple_var=True):
         if isinstance(image_or_shape,torch.Tensor):
             x = image_or_shape
         else:
             x = torch.randn(image_or_shape,device=device)
-        # debug 
+        # debug
         # print(x.max(),x.min(),x.mean())
         # for t in range(self.N-1,-1,-1):
         #     self.sample_backward_step(net, x, t, simple_var)
@@ -518,20 +518,20 @@ class DDPM(nn.Module):
         bs = x_t.shape[0]
         t_tensor = t*torch.ones(bs,dtype=torch.long,device=x_t.device).reshape(-1,1)
         if t == 0:
-            noise = 0 
+            noise = 0
         else:
             if simple_var:
                 var = self.betas[t]
             else:
-                var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t]) * self.betas[t] 
+                var = (1-self.alpha_bars_prev[t])/(1-self.alpha_bars[t]) * self.betas[t]
             #这个地方还真写错了 randn_like和rand_like不一样wor
             noise = torch.randn_like(x_t) * torch.sqrt(var)
         eps = net(x_t,t_tensor)
         # with open("./cache.txt",'a') as f:
         #     f.write(f"{eps.mean().item()},{eps.max().item()},{eps.min().item()}\n")
-        eps = ((1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t])) *eps 
+        eps = ((1 - self.alphas[t]) / torch.sqrt(1 - self.alpha_bars[t])) *eps
         mean = (x_t - eps) / torch.sqrt(self.alphas[t])
-        # eps = torch.sqrt(1-self.alpha_bars[t]) * eps 
+        # eps = torch.sqrt(1-self.alpha_bars[t]) * eps
         # print(1-self.alpha_bars[t])
         # mean = (x_t-eps)/torch.sqrt(self.alpha_bars[t])
         # print(f"{eps.mean().item()},{eps.max().item()},{eps.min().item()}")
@@ -550,44 +550,44 @@ class DDIM(DDPM):
     def __init__(self,
                  min_beta: float = 0.0001,
                  max_beta: float = 0.02,
-                 ddim_step: int = 20, # sample interval of ddim 
+                 ddim_step: int = 20, # sample interval of ddim
                   N: int=1000):
         super().__init__(min_beta, max_beta,N)
         self.ddim_step = ddim_step
-        
+
     def sample_backward(self, image_or_shape, net, device="cuda", simple_var=True):
         if isinstance(image_or_shape,torch.Tensor):
             x = image_or_shape
         else:
             x = torch.randn(image_or_shape,device=device)
-        
+
         sample_timestep = torch.linspace(0,1,self.ddim_step+1,device=device)
         for i in range(self.ddim_step-1,0,-1):
             bs = x.shape[0]
             t_cur = sample_timestep[i]
             t_prev = sample_timestep[i-1]
-            
+
             ab_p = self.arlpha_bars[t_prev]
             ab_c = self.alpha_bars[t_cur]
             t_tensor = (bs * torch.ones(x.shape[0],device=device,dtype=torch.long)).reshpae(-1,1)
             eps = net(x, t_tensor)
-            
+
             if simple_var:
-                var = torch.sqrt(1-ab_p/ab_c) 
+                var = torch.sqrt(1-ab_p/ab_c)
             else:
                 eta = 1 # for ddim eta=1
                 var = eta * (1 - ab_p) / (1 - ab_c) * (1 - ab_c / ab_p)
             noise = torch.randn_like(x)
-            
+
             x = torch.sqrt(ab_p/ab_c) * x +\
                 eps * var  + \
                 torch.sqrt(var) * noise
-        return x 
+        return x
 
-### trainer 
+### trainer
 class LightningImageDenoiser(pl.LightningModule):
-    def __init__(self, 
-                 batch_size=512, 
+    def __init__(self,
+                 batch_size=512,
                  lr=0.001,
                  min_beta=0.0001,
                  max_beta=0.02,
@@ -605,8 +605,8 @@ class LightningImageDenoiser(pl.LightningModule):
         self.model = UNet( n_steps=N, image_shape=image_shape)
         self.ddpm = DDPM(min_beta=min_beta,max_beta=max_beta,N=N)
         self.criterion = nn.MSELoss()
-        self.N = N 
-        self.lr = lr 
+        self.N = N
+        self.lr = lr
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.scheduler = scheduler
@@ -626,12 +626,12 @@ class LightningImageDenoiser(pl.LightningModule):
         # print(t)
         # print("training ",eps.max(),x_t.max(),eps_theta.max())
         loss = self.criterion(eps,eps_theta)
-        return loss 
+        return loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         if self.scheduler == "ReduceLROnPlateau":
-            
+
             scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
             return {
                 'optimizer': optimizer,
@@ -644,7 +644,7 @@ class LightningImageDenoiser(pl.LightningModule):
         elif self.scheduler == "CosineAnnealingLR":
             from torch.optim.lr_scheduler import CosineAnnealingLR
             self.scheduler = CosineAnnealingLR(optimizer, T_max=10)  # 定义CosineAnnealingLR调度器
-            
+
             return {
                 'optimizer': optimizer,
                 'lr_scheduler': self.scheduler
@@ -662,12 +662,12 @@ class LightningImageDenoiser(pl.LightningModule):
         # Manually update the learning rate based on the scheduler
         if self.scheduler is not None:
             self.scheduler.step()  # Update the scheduler
-            
+
     def validation_step(self, batch, batch_idx):
         val_loss = self(batch)
         self.log('val_loss', val_loss, on_step=False, on_epoch=True, sync_dist=True, prog_bar=True)
-        return val_loss 
-    
+        return val_loss
+
     def training_step(self, batch, batch_idx):
         loss = self(batch)
         self.log('train_loss', loss)
@@ -690,22 +690,23 @@ class LightningImageDenoiser(pl.LightningModule):
                 output_file = os.path.join(output_dir, "generated_images.png")
                 channels,h,w = self.image_shape
                 save_image(imgs.view(n_sample,channels,h,w),output_file, nrow=3, normalize=True)
-    
+
     def on_train_epoch_end(self):
         if (self.current_epoch + 1)  % self.sample_epoch_interval==0:
             output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch+1:05}')
-            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)    
+            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)
 
-    
-###  parse args 
+
+###  parse args
 def parse_args():
     """
     解析命令行参数，并返回解析结果。
     """
     parser = argparse.ArgumentParser(description='Training script')
-    ## epoch 200 with loss 0.02 is enough to generate on mnist 
+    ## epoch 200 with loss 0.02 is enough to generate on mnist
     parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
     parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
+    parser.add_argument('--accelerator', type=str, default="gpu", help='Default gpu, choice=[gpu, cpu, tpu]')
     parser.add_argument('--devices', type=str, default='0,', help='Specify the device(s) for training (e.g., "cuda" or "cuda:0")')
     parser.add_argument('--max_epochs', type=int, default=600, help='Maximum number of epochs for training')
     parser.add_argument('--max_steps', type=int, default=1000, help='Maximum number of epochs for training')
@@ -719,7 +720,7 @@ def parse_args():
     parser.add_argument('--imsize', type=int, default=64, help='image size ')
     parser.add_argument('--scheduler', type=str, default="None", help='lr policy')
     parser.add_argument('--sample_epoch_interval', type=int, default=10, help='sample interval')
-    
+
     parser.add_argument('--dataset', type=str, default="celeba", help='dataset')
     parser.add_argument('--datapath', type=str, default=None, help='dataset')
     args = parser.parse_args()
@@ -737,10 +738,10 @@ if __name__ == "__main__":
             data_module = CelebDataModule(batch_size=args.batch_size,
                                           num_workers=args.num_workers,imsize=args.imsize)
         elif dataset=="mnist":
-            data_module = MNISTDataModule(data_dir="path/to/mnist/data", 
+            data_module = MNISTDataModule(data_dir=".cache/mnist/",
                                           batch_size=args.batch_size,num_workers=args.num_workers)
         elif dataset=="image":
-            data_module = ImageDataModule(data_dir=args.datapath, 
+            data_module = ImageDataModule(data_dir=args.datapath,
                                           batch_size=args.batch_size,num_workers=args.num_workers)
         else:
             raise NotImplementedError("Not supported dataset")
@@ -770,9 +771,9 @@ if __name__ == "__main__":
             save_top_k=3,  # 保存最好的 3 个 checkpoint
             verbose=True
         )
-        pretrain_path = None 
+        pretrain_path = None
         trainer = pl.Trainer(
-            accelerator="gpu",
+            accelerator=args.accelerator,
             devices=args.devices,                    # 使用一块 GPU 进行训练
             max_epochs=args.max_epochs,             # 最大训练 epoch 数
             logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
@@ -782,7 +783,7 @@ if __name__ == "__main__":
 
         trainer.fit(model,data_module,ckpt_path = pretrain_path)
     else:
-        # you may modify your checkpoint path below 
+        # you may modify your checkpoint path below
         ckpt_folder = f"./checkpoints/{expname}"
         paths = os.listdir(ckpt_folder)
         paths = [os.path.join(ckpt_folder,i) for i in paths]

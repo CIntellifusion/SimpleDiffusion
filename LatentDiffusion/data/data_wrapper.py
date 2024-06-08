@@ -7,7 +7,7 @@ from datasets import load_dataset
 imsize = 64 
 ### data
 class MNISTDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir="./", batch_size=64,num_workers=63):
+    def __init__(self, data_dir="./", batch_size=64,num_workers=63,imsize=28):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
@@ -38,8 +38,9 @@ class MNISTDataModule(pl.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=self.batch_size,num_workers=self.num_workers,pin_memory=True)
 
 class CelebDataModule(pl.LightningDataModule):
-    def __init__(self, batch_size=64,num_workers=63,imsize=32):
+    def __init__(self,data_dir="nielsr/CelebA-faces",batch_size=64,num_workers=63,imsize=32):
         super().__init__()
+        self.data_dir = data_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.imsize = imsize 
@@ -63,7 +64,7 @@ class CelebDataModule(pl.LightningDataModule):
         return train_dataset, val_dataset
 
     def prepare_data(self):
-        self.dataset = load_dataset('nielsr/CelebA-faces')#.map(self.apply_transform)
+        self.dataset = load_dataset(self.data_dir)#.map(self.apply_transform)
         # self.dataset = self.dataset.with_transform(self.apply_transform)
     def setup(self, stage=None, transform=None):
         if stage == 'fit' or stage is None:

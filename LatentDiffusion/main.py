@@ -18,7 +18,7 @@ import numpy as np
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.utils import save_image, make_grid
-
+from pytorch_lightning.trainer import Trainer
 ### local files 
 from data.data_wrapper import MNISTDataModule,CelebDataModule
 from models.unet import UNet
@@ -45,8 +45,8 @@ during the inference stage:
 3. update x_t = x_t-1
 4. repeat until reach the target timestep
 """
-
-
+from util import instantiate_from_config
+from omegaconf import OmegaConf
 ### trainer 
 class LatentDiffusion(pl.LightningModule):
     def __init__(self, 
@@ -61,20 +61,21 @@ class LatentDiffusion(pl.LightningModule):
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
-                 unet_config = {"channels":[10, 20, 40 ,80],"pe_dim":100,"with_attns":True},
-                 vae_config = {"resolution":64,'in_channels':3,"device":"cuda:0"},
+                 unet_config = {},
+                 vae_config = {},
                  vae_pretrained_path = None
                  ):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
-        #TODO: latent shape 
         self.ddpm = DDPM(min_beta=min_beta,max_beta=max_beta,N=N)
-        self.vae = VAE(**vae_config)
+        print("===================")
+        print(vae_config)
+        self.vae = instantiate_from_config(vae_config)
         self.latent_shape = self.vae.decoder.z_shape[1:]
-        self.denoiser = UNet(n_steps=N, 
-                             latent_shape=self.latent_shape,
-                             **unet_config)
+        unet_config["params"]["n_steps"]=N
+        unet_config["params"]["latent_shape"]=self.latent_shape
+        self.denoiser = instantiate_from_config(unet_config)
         self.vae_config = vae_config
         self.config_vae(vae_pretrained_path)
         self.criterion = nn.MSELoss()
@@ -220,74 +221,31 @@ class LatentDiffusion(pl.LightningModule):
     
 ###  parse args 
 def parse_args():
-    """
-    解析命令行参数，并返回解析结果。
-    """
     parser = argparse.ArgumentParser(description='Training script')
     ## epoch 200 with loss 0.02 is enough to generate on mnist 
     parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
     parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
-    parser.add_argument('--devices', type=str, default='0,', help='Specify the device(s) for training (e.g., "cuda" or "cuda:0")')
-    parser.add_argument('--max_epochs', type=int, default=600, help='Maximum number of epochs for training')
-    parser.add_argument('--max_steps', type=int, default=1000, help='Maximum number of epochs for training')
-    parser.add_argument('--min_beta', type=float, default=0.0001, help='Minimum value of beta for DDPM')
-    parser.add_argument('--max_beta', type=float, default=0.02, help='Maximum value of beta for DDPM')
-    parser.add_argument('--max_step', type=int, default=1000, help='Number of steps (N) for DDPM')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate for optimizer')
-    parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for training')
-    parser.add_argument('--num_workers', type=int, default=63, help='num_workers training data loader')
-    parser.add_argument('--channels', type=int, default=3, help='channels of image ')
-    parser.add_argument('--imsize', type=int, default=64, help='image size ')
-    parser.add_argument('--scheduler', type=str, default="None", help='lr policy')
-    parser.add_argument('--dataset', type=str, default="mnist", help='dataset')
-    parser.add_argument('--sample_epoch_interval', type=int, default=1, help='sample interval')
-    parser.add_argument('--vae_ckpt', type=str, default="/home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae/model-epoch=81-val_loss=10050.03320.ckpt", help='pretrained vae checkpoint path')
+    parser.add_argument('--auto_resume', action='store_true', help='whether resume from trained checkpoint ')
+    parser.add_argument("-b", "--base", nargs="*", metavar="configs/train.yaml", help="paths to base configs. Loaded from left-to-right. Parameters can be overwritten or added with command-line options of the form `--key value`.", default=list())
     args = parser.parse_args()
 
     return args
-
-#python main.py  --train --expname ldm_celeb64 --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_aemodule_celeb64_halftiny/model-epoch=38-val_loss=397428.12500.ckpt
-#python main.py  --train --expname ldm_celeb64 --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
-#python main.py  --train --expname ldm_celeb64_unetmid --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
-#python main.py  --train --expname ldm_celeb64_unetlarget --max_epochs 100 --batch_size 64 --dataset celeba --vae_ckpt /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
 if __name__ == "__main__":
-    args = parse_args()
-    expname = args.expname
-    imsize = args.imsize
+    args= parse_args()
+    # args, unknown = parser.parse_known_args()
+    # parser = Trainer.add_argparse_args(parser)
+    configs = [OmegaConf.load(cfg) for cfg in args.base]
+    # cli = OmegaConf.from_dotlist(unknown)
+    # config = OmegaConf.merge(*configs, cli)
+    config = OmegaConf.merge(*configs)
+    expname = config.expname
+    imsize = config.imsize
     if args.train:
-        dataset = args.dataset
-        # dataset = "celeba"
-        if dataset =="celeba":
-            data_module = CelebDataModule(batch_size=args.batch_size,
-                                          num_workers=args.num_workers,imsize=args.imsize)
-        elif dataset=="mnist":
-            data_module = MNISTDataModule(data_dir="/home/haoyu/research/simplemodels/data", 
-                                          batch_size=args.batch_size,num_workers=args.num_workers)
-        else:
-            raise NotImplementedError("Not supported dataset")
+        data_module = instantiate_from_config(config.data)
         data_module.prepare_data()
         data_module.setup()
-        default_unet_config = {"channels":[64,128,128,64],
-                   "pe_dim":100,
-                   "with_attns":True,
-                   "norm_type":"ln"
-                   }
-        model = LatentDiffusion(
-            min_beta=args.min_beta,
-            max_beta=args.max_beta,
-            N = args.max_steps,
-            batch_size = args.batch_size,
-            num_workers=args.num_workers,
-            channels=args.channels,
-            imsize= args.imsize,
-            lr = args.lr,
-            scheduler=args.scheduler,
-            sample_output_dir=f"./sample/{expname}",
-            sample_epoch_interval=args.sample_epoch_interval,
-            vae_pretrained_path = args.vae_ckpt,
-            unet_config=default_unet_config
-            )
-
+        model = instantiate_from_config(config.model)
+        
         # 设置保存 checkpoint 的回调函数
         checkpoint_callback = ModelCheckpoint(
             dirpath=f"./checkpoints/{expname}",  # 保存 checkpoint 的目录
@@ -297,18 +255,17 @@ if __name__ == "__main__":
             save_top_k=3,  # 保存最好的 3 个 checkpoint
             verbose=True
         )
-        
-        pretrain_path = None 
-        # pretrain_path = "/home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/ldm_celeb64/model-epoch=07-val_loss=0.77585.ckpt" 
+        trainer_config = config.trainer.params
         trainer = pl.Trainer(
-            accelerator="gpu",
-            devices=args.devices,                    # 使用一块 GPU 进行训练
-            max_epochs=args.max_epochs,             # 最大训练 epoch 数
+            **trainer_config,
             logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
-            # progress_bar_refresh_rate=20,  # 进度条刷新频率
             callbacks=[checkpoint_callback],  # 注册 checkpoint 回调函数
         )
-        trainer.fit(model,data_module,ckpt_path = pretrain_path)
+        if config.pretrain_path != "None":
+            pretrain_path = config.pretrain_path
+        else:
+            pretrain_path = None 
+        trainer.fit(model,data_module,ckpt_path =pretrain_path)
     else:
         ckpt_folder = f"./checkpoints/{expname}"
         paths = os.listdir(ckpt_folder)
@@ -316,17 +273,6 @@ if __name__ == "__main__":
         paths = ["/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/linear_normal/model-epoch=1184-val_loss=0.00332.ckpt"]
         for path in paths:
             ckpt = os.path.basename(path).replace(".ckpt","")
-            model = LatentDiffusion(
-                min_beta=args.min_beta,
-                max_beta=args.max_beta,
-                N = args.max_steps,
-                batch_size = args.batch_size,
-                num_workers=args.num_workers,
-                channels=args.channels,
-                imsize= args.imsize,
-                lr = args.lr,
-                scheduler=args.scheduler,
-                sample_epoch_interval=args.sample_epoch_interval
-                )
+            model = instantiate_from_config(config.model)
             model.load_state_dict(torch.load(path)['state_dict'],strict=True)
             model.sample_images(f'./sample/{ckpt}',n_sample=32,device="cuda:0")

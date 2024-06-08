@@ -1,0 +1,75 @@
+expname: celeb_vae_config
+imsize: 64 
+pretrain_path :  
+trainer:
+  target: pytorch_lightning.Trainer
+  params:
+    max_epochs: 20 
+    accelerator: gpu
+    devices: 1 
+
+model:
+  target: vae.VAETrainer
+  params:
+    imsize: 64
+    channels: 3
+    lr: 1e-3
+    batch_size: 64
+    num_workers: 15
+    scheduler: Linear
+    sample_output_dir: "./sample/celeb_vae"
+    sample_epoch_interval: 1
+    vae_config:
+        target: vae.VAE
+        params:
+          device: cuda:0  # or cpu
+          encoder_config:
+            target: models.ae_module.Encoder
+            params:
+                ch: 16
+                resolution: 64
+                in_channels: 3 
+                ch_mult : 
+                  - 1
+                  - 2
+                  - 4
+                  - 8
+                num_res_blocks: 3
+                attn_resolutions: 
+                  - 16
+                dropout: 0.0
+                resamp_with_conv: True
+                z_channels: 16
+                double_z: False
+                use_linear_attn: False
+                use_checkpoint: False
+          decoder_config:
+            target: models.ae_module.Decoder
+            params:
+                  ch: 16
+                  out_ch: 3
+                  resolution: 64
+                  in_channels: 3
+                  ch_mult: 
+                    - 1
+                    - 2
+                    - 4
+                    - 8
+                  num_res_blocks: 2
+                  attn_resolutions: 
+                    - 16
+                  dropout: 0.0
+                  resamp_with_conv: True
+                  z_channels: 16
+                  give_pre_end: False   
+                  tanh_out: False
+                  use_linear_attn: False
+                  use_checkpoint: False
+
+data:
+  target: data.data_wrapper.CelebDataModule
+  params:
+    data_dir: nielsr/CelebA-faces
+    batch_size: 64
+    num_workers: 16
+    imsize : 64

@@ -12,47 +12,15 @@ import os , cv2 , sys
 from tqdm import tqdm
 from torchvision.utils import save_image, make_grid
 import pytorch_lightning as pl 
-import torch.optim as optim
-from data.data_wrapper import MNISTDataModule,CelebDataModule
-from models.ae_module import SimpleEncoder,SimpleDecoder
-from models.ae_module import Encoder,Decoder
-
-    
         
 class VAE(nn.Module):
-    def __init__(self, resolution,in_channels,
-                 z_channels =16 ,
+    def __init__(self, 
+                encoder_config,
+                decoder_config,
                  device="cuda"):
         super(VAE, self).__init__()
-        print("resolution:",resolution,"in_channels:",in_channels)
-        self.encoder = Encoder(
-                      ch=16,
-                      resolution=resolution,
-                      in_channels=in_channels,
-                      ch_mult=(1,2,4,8),
-                      num_res_blocks=2,
-                      attn_resolutions=(16,),
-                      dropout=0.0,
-                      resamp_with_conv=True,
-                      z_channels=z_channels,
-                      double_z=False,
-                      use_linear_attn=False,
-                      use_checkpoint=False)
-        self.decoder = Decoder(ch=16,
-                      out_ch=in_channels,
-                      resolution=resolution,
-                      in_channels=in_channels,
-                      ch_mult=(1,2,4,8),
-                      num_res_blocks=2,
-                      attn_resolutions=(16,),
-                      dropout=0.0,
-                      resamp_with_conv=True,
-                      z_channels=z_channels,
-                      give_pre_end=False,   
-                      tanh_out=False,
-                      use_linear_attn=False,
-                      use_checkpoint=False)
-        
+        self.encoder = instantiate_from_config(encoder_config)
+        self.decoder = instantiate_from_config(decoder_config)
         self.device = device
     
     def reparameterization(self, mean, var):
@@ -102,10 +70,12 @@ class VAETrainer(pl.LightningModule):
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
-                 device = "cuda"
+                 vae_config={},
+                 device = "cuda",
                  ):
         super(VAETrainer, self).__init__()
-        self.model = VAE(resolution=imsize,in_channels=channels,device=device)
+        # self.model = VAE(resolution=imsize,in_channels=channels,device=device)
+        self.model = instantiate_from_config(vae_config)
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
         self.lr = lr 
@@ -159,22 +129,37 @@ class VAETrainer(pl.LightningModule):
             self.sample_images(output_dir=output_dir,n_sample=25,device="cuda",simple_var=True)    
 
     
+import argparse 
+from omegaconf import OmegaConf
+from util import instantiate_from_config
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Training script')
+    ## epoch 200 with loss 0.02 is enough to generate on mnist 
+    parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
+    parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
+    parser.add_argument('--auto_resume', action='store_true', help='whether resume from trained checkpoint ')
+    parser.add_argument("-b", "--base", nargs="*", metavar="configs/train.yaml", help="paths to base configs. Loaded from left-to-right. Parameters can be overwritten or added with command-line options of the form `--key value`.", default=list())
+    args = parser.parse_args()
+
+    return args
+# 尽量不要用可变的变量作为参数，这样更改了之后又bug不知道
+# 重要参数不默认， 默认参数不重要
+# 硬编码的地方要写注释 反之后来不知道为什么 
+# 多写脚本处理问题 
+
+# 0608 modification 
+# the VAE trainer should only contain training logics 
+# and the model config should be decoupled 
 
 
-if __name__=="__main__":
-    dataset_path = '../data'
-    imsize = 64
-    batch_size = 64
+if __name__ == "__main__":
+    args= parse_args()
+    configs = [OmegaConf.load(cfg) for cfg in args.base]
+    config = OmegaConf.merge(*configs)
+    expname = config.expname
     # data_module = MNISTDataModule(data_dir=dataset_path, batch_size=100, num_workers=63)
-    data_module = CelebDataModule(batch_size=batch_size,
-                        num_workers=63,imsize=imsize)
-    cuda = True
-    DEVICE = torch.device("cuda" if cuda else "cpu")
-    lr = 1e-3
-    epochs = 40
-    sample_epoch_interval = 1
-    expname = "vae_celeb64_ch16_outz16"
-    sample_output_dir = f"./sample/{expname}"
+    data_module = instantiate_from_config(config.data)
     from pytorch_lightning.callbacks import ModelCheckpoint
     checkpoint_callback = ModelCheckpoint(
     dirpath=f"./checkpoints/{expname}",  # 保存 checkpoint 的目录
@@ -184,27 +169,13 @@ if __name__=="__main__":
     save_top_k=3,  # 保存最好的 3 个 checkpoint
     verbose=True
     )
-    pretrain_path = "/home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae/model-epoch=38-val_loss=10231.90039.ckpt"
-    pretrain_folder = "./checkpoints/vae_aemodule_celeb64/" 
-    pretrain_path = os.path.join(pretrain_folder,"model-epoch=01-val_loss=406142.43750.ckpt") 
-    pretrain_path=None 
-    model = VAETrainer(batch_size=batch_size,
-                        channels=3,
-                        lr=lr,imsize=imsize,
-                        num_workers=63,
-                        sample_output_dir=sample_output_dir,
-                        sample_epoch_interval=sample_epoch_interval)
-    
-    trainer = pl.Trainer(
-                        accelerator = "gpu",
-                        devices=1,
-                        max_epochs=epochs,
-                        logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
-                        callbacks=[checkpoint_callback],
-                        )
-    
-    trainer.fit(model=model,datamodule=data_module,ckpt_path=pretrain_path)
 
-
-    
+    model = instantiate_from_config(config.model)
+    trainer = instantiate_from_config(config.trainer)
+    # config checkpoint 
+    if config.pretrain_path != "None":
+        pretrain_path = config.pretrain_path
+    else:
+        pretrain_path = None 
+    trainer.fit(model,data_module,ckpt_path =pretrain_path)
     
