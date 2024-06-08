@@ -1,0 +1,47 @@
+expname: celeb_config 
+imsize: 32 
+pretrain_path :  
+trainer:
+  target: pytorch_lightning.Trainer
+  params:
+    max_epochs: 20 
+    accelerator: gpu
+    devices: 1 
+
+model:
+  target: main.LatentDiffusion
+  params:
+    min_beta: 0.0001
+    max_beta: 0.02 
+    N: 1000
+    batch_size: 64
+    num_workers: 8
+    imsize: 64
+    lr: 1e-4
+    scheduler: Linear
+    sample_output_dir: "./sample/celeb_config"
+    sample_epoch_interval: 1
+    vae_pretrained_path: /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
+    vae_config:
+        target: vae.VAE
+        params:
+          resolution: 64
+          in_channels: 3
+          device: cuda:0  # or cpu
+    unet_config:
+        target: models.unet.UNet
+        params:
+          channels: [64,128,128,32]
+          pe_dim: 100
+          with_attns: True
+          norm_type: ln
+          activation_type: silu
+          num_res_block: 2
+
+data:
+  target: data.data_wrapper.CelebDataModule
+  params:
+    data_dir: nielsr/CelebA-faces
+    batch_size: 64
+    num_workers: 16
+    imsize : 64

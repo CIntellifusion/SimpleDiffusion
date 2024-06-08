@@ -38,20 +38,17 @@ def images2gif(image_files:list,save_path:str):
         gif_frames.append(imageio.imread(file_name))
     imageio.mimsave(save_path, gif_frames, duration=0.5) 
 
-if __name__=="__main__":
-    
-    folder = "./LatentDiffusion/sample/sample_vae_tiny"
-    # folder = "./sample/randn/"
-    # name = "0000_0008.png"
-    name = "generated_images.png"
-    subfolders = sorted(os.listdir(folder))
-    
-    # for sf in subfolders:
-    #     os.system(f"mv {os.path.join(folder,sf)} {os.path.join(folder,f'{int(sf):05d}')}")
-    # subfolders = sorted(os.listdir(folder))
-    
-    # for sf in subfolders:
-    #     concat_images(os.path.join(folder,sf),name,'square')
-    
-    image_files = sorted([os.path.join(folder,sf,name) for sf in subfolders])
-    images2gif(image_files,os.path.join(folder,"generated_images.gif"))
+
+### config functions 
+import importlib
+def get_obj_from_str(string, reload=False):
+    module, cls = string.rsplit(".", 1)
+    if reload:
+        module_imp = importlib.import_module(module)
+        importlib.reload(module_imp)
+    return getattr(importlib.import_module(module, package=None), cls)
+
+def instantiate_from_config(config):
+    if not "target" in config:
+        raise KeyError("Expected key `target` to instantiate.")
+    return get_obj_from_str(config["target"])(**config.get("params", dict()))
