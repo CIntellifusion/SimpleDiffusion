@@ -2,13 +2,12 @@
 
 (pkgs.mkShell rec {
 
-  buildInputs = (with pkgs; [ python39 poetry gcc gnumake zlib libGL glib]);
+  buildInputs = (with pkgs; [ python3 poetry gcc gnumake libGL zlib glib cudatoolkit]);
 
-  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc];
+  LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath ([pkgs.linuxPackages.nvidia_x11 pkgs.stdenv.cc.cc.lib] ++ buildInputs);
 
   shellHook = ''
-  export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
-  poetry env use ${pkgs.python39}/bin/python
+  poetry env use ${pkgs.python3}/bin/python
   poetry install
   '';
 })
