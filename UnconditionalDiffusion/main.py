@@ -3,7 +3,8 @@ autor: haoyu
 date: 20240501-0506
 an simplified unconditional diffusion for image generation
 """
-import os , cv2 ,argparse
+import os
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,11 +14,9 @@ from torchvision.datasets import ImageFolder
 from datasets import load_dataset
 from torchvision.datasets import MNIST
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint,EarlyStopping, Callback
-import numpy as np
-
+from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torchvision.utils import save_image, make_grid
+from torchvision.utils import save_image
 
 ## sorry to use global value
 imsize = 32

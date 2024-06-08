@@ -3,16 +3,15 @@ author: haoyu
 base on: https://github.com/Jackson-Kang/Pytorch-VAE-tutorial
 to implement a VAE training framework using pytorch lightning 
 """
-
+import os 
 import torch
 import torch.nn as nn
-
-import numpy as np
-import os , cv2 , sys
-from tqdm import tqdm
-from torchvision.utils import save_image, make_grid
+from torchvision.utils import save_image
 import pytorch_lightning as pl 
-        
+            
+import argparse 
+from omegaconf import OmegaConf
+from util import instantiate_from_config
 class VAE(nn.Module):
     def __init__(self, 
                 encoder_config,
@@ -117,7 +116,7 @@ class VAETrainer(pl.LightningModule):
             generated_images = self.model.sample(n_sample)
             save_image(generated_images.view(n_sample,*self.image_shape),output_file, nrow=5, normalize=True)
     def on_fit_start(self):
-        output_dir = os.path.join(self.sample_output_dir, f'init_ckpt')
+        output_dir = os.path.join(self.sample_output_dir, 'init_ckpt')
         os.makedirs(output_dir,exist_ok=True)
         self.sample_images(output_dir=output_dir,n_sample=25,device="cuda",simple_var=True)    
 
@@ -128,10 +127,7 @@ class VAETrainer(pl.LightningModule):
             os.makedirs(output_dir,exist_ok=True)
             self.sample_images(output_dir=output_dir,n_sample=25,device="cuda",simple_var=True)    
 
-    
-import argparse 
-from omegaconf import OmegaConf
-from util import instantiate_from_config
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script')

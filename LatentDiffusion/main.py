@@ -3,29 +3,20 @@ autor: haoyu
 date: 20240501-0506
 an simplified unconditional diffusion for image generation
 """
-import os , cv2 ,argparse
+import os
+import argparse
+from omegaconf import OmegaConf
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torchvision.datasets import ImageFolder
-from datasets import load_dataset
-from torchvision.datasets import MNIST
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint,EarlyStopping, Callback
-import numpy as np
-
+from torchvision.utils import save_image
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torchvision.utils import save_image, make_grid
-from pytorch_lightning.trainer import Trainer
 ### local files 
-from data.data_wrapper import MNISTDataModule,CelebDataModule
-from models.unet import UNet
-from schedulers.ddpm import DDPM
-from vae import VAE
-from util import images2gif
 ## sorry to use global value 
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+from schedulers.ddpm import DDPM
+from util import instantiate_from_config
+from util import images2gif
 imsize = 32 
 """ 
 an simple overview of the code structure
@@ -45,8 +36,7 @@ during the inference stage:
 3. update x_t = x_t-1
 4. repeat until reach the target timestep
 """
-from util import instantiate_from_config
-from omegaconf import OmegaConf
+
 ### trainer 
 class LatentDiffusion(pl.LightningModule):
     def __init__(self, 

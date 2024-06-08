@@ -1,7 +1,8 @@
 ## given one folder, concat the images in them and save them in the same folder
-import os,cv2 
+import os
+import cv2 
 import numpy as np 
-from PIL import Image
+import imageio 
 def concat_images(folder,name="generated_images.jpg",policy='square'):
     files = os.listdir(folder)
     files.sort()
@@ -30,7 +31,7 @@ def concat_images(folder,name="generated_images.jpg",policy='square'):
     cv2.imwrite(os.path.join(folder,name),images)
 
 ## image to gifs
-import imageio 
+
 def images2gif(image_files:list,save_path:str):
     gif_frames = []
     for file_name in image_files:
