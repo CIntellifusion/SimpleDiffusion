@@ -124,6 +124,7 @@ class LatentDiffusion(pl.LightningModule):
             }
         else:
             return optimizer
+    
     def lr_scheduler_step(self, epoch, batch_idx, optimizer,**kwargs):
         # Manually update the learning rate based on the scheduler
         if self.scheduler is not None:
@@ -160,6 +161,7 @@ class LatentDiffusion(pl.LightningModule):
         # print("training ",eps.max(),x_t.max(),eps_theta.max())
         loss = self.criterion(eps,eps_theta)
         return loss 
+    
     def validation_step(self, batch, batch_idx):
         batch = self.get_input(batch)
         val_loss = self(batch)

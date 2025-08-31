@@ -13,6 +13,7 @@ Compare the result with papers.
 
 **Notice: This repo is under heavy development.**
 
+# Setup Environment
 
 
 # Task 1 Unconditional Diffusion
@@ -79,7 +80,6 @@ python main.py --train ---batch_size=128 --imsize=32
 ### 关于超参数修改
 
 1. 改超参数之前最好进行backup 尤其是进程并行的时候
-
 
 
 ### 自动搜索超参数的脚本
