@@ -32,6 +32,7 @@ Compare the result with papers.
 
 for further details please refer to `./UnoncditionalDiffusion/experiments.pptx`  and `./UnoncditionalDiffusion/experiments.md` 
 
+- [ ] Flow Matching Schulder 
 
 
 ## 1.1 Train on mnist 
@@ -131,6 +132,18 @@ python main.py -b configs/train_ldm.yaml
 ![unetlarge_celeb](README/unetlarge_celeb.png)
 
 ![unet_large](README/unet_large.gif)![unet_mid](README/unet_mid.gif)
+
+## Train Flow Matching 
+
+
+```shell
+#step 1 
+python vae.py -b configs/train_vae.yaml
+#step 2
+#note: please add the path of pretrained vae to config 
+#and also specify l
+python main.py -b configs/train_fm.yaml --train
+```
 
 ## Implementation Plan
 

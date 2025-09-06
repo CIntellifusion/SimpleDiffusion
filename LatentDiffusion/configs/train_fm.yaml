@@ -1,4 +1,4 @@
-expname: celeb_config 
+expname: flowmatching 
 imsize: 32 
 pretrain_path :  
 trainer:
@@ -11,23 +11,68 @@ trainer:
 model:
   target: main.LatentDiffusion
   params:
-    min_beta: 0.0001
-    max_beta: 0.02 
-    N: 1000
     batch_size: 64
     num_workers: 8
     imsize: 64
+    channels: 3
     lr: 1e-4
     scheduler: Linear
     sample_output_dir: "./sample/celeb_config"
     sample_epoch_interval: 1
-    vae_pretrained_path: /home/haoyu/research/simplemodels/LatentDiffusion/checkpoints/vae_celeb64_ch16_outz16/model-epoch=38-val_loss=398023.75000.ckpt
+
+    noise_scheduler_config:
+      target: schedulers.flowmatching.FlowMatching
+      params:
+        num_timesteps: 40 
+ 
+    vae_pretrained_path: /root/research/SimpleDiffusion/LatentDiffusion/checkpoints/epoch=5-step=15198.ckpt
     vae_config:
-        target: vae.VAE
-        params:
-          resolution: 64
-          in_channels: 3
-          device: cuda:0  # or cpu
+      target: vae.VAE
+      params:
+        device: cuda:0  # or cpu
+        encoder_config:
+          target: models.ae_module.Encoder
+          params:
+              ch: 16
+              resolution: 64
+              in_channels: 3 
+              ch_mult : 
+                - 1
+                - 2
+                - 4
+                - 8
+              num_res_blocks: 3
+              attn_resolutions: 
+                - 16
+              dropout: 0.0
+              resamp_with_conv: True
+              z_channels: 16
+              double_z: False
+              use_linear_attn: False
+              use_checkpoint: False
+        decoder_config:
+          target: models.ae_module.Decoder
+          params:
+                ch: 16
+                out_ch: 3
+                resolution: 64
+                in_channels: 3
+                ch_mult: 
+                  - 1
+                  - 2
+                  - 4
+                  - 8
+                num_res_blocks: 2
+                attn_resolutions: 
+                  - 16
+                dropout: 0.0
+                resamp_with_conv: True
+                z_channels: 16
+                give_pre_end: False   
+                tanh_out: False
+                use_linear_attn: False
+                use_checkpoint: False
+
     unet_config:
         target: models.unet.UNet
         params:

@@ -14,7 +14,6 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 ## sorry to use global value 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
-from schedulers.ddpm import DDPM
 from util import instantiate_from_config
 from util import images2gif
 imsize = 32 
@@ -42,8 +41,6 @@ class LatentDiffusion(pl.LightningModule):
     def __init__(self, 
                  batch_size=512, 
                  lr=0.001,
-                 min_beta=0.0001,
-                 max_beta=0.02,
                  N=1000,
                  imsize=32,
                  num_workers=63,
@@ -51,6 +48,7 @@ class LatentDiffusion(pl.LightningModule):
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
+                 noise_scheduler_config = {},
                  unet_config = {},
                  vae_config = {},
                  vae_pretrained_path = None
@@ -58,7 +56,7 @@ class LatentDiffusion(pl.LightningModule):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
         image_shape = [channels,imsize,imsize]
-        self.ddpm = DDPM(min_beta=min_beta,max_beta=max_beta,N=N)
+        self.noise_scheduler = instantiate_from_config(noise_scheduler_config)
         print("===================")
         print(vae_config)
         self.vae = instantiate_from_config(vae_config)
@@ -80,7 +78,7 @@ class LatentDiffusion(pl.LightningModule):
         self.sample_epoch_interval = sample_epoch_interval
         
     def config_vae(self,pretrained_path):
-        ckpt = torch.load(pretrained_path)
+        ckpt = torch.load(pretrained_path,weights_only=False)
         if "state_dict" in ckpt.keys():
             ckpt = ckpt["state_dict"]
         new_state_dict = {}
@@ -151,10 +149,9 @@ class LatentDiffusion(pl.LightningModule):
         # print("forward ae encode shape",latents.shape)
         # latents = latents.reshape(bs,*self.latent_shape)
         # print("forward ae reshaped encode shape",latents.shape)
-
         t = torch.randint(0,self.N,(bs,),device = latents.device)
         eps = torch.randn_like(latents,device=latents.device)
-        x_t = self.ddpm.sample_forward(latents, t, eps)
+        x_t = self.noise_scheduler.sample_forward(latents, t, eps)
         # print(latents.max(),latents.min(),x_t.max(),x_t.min())
         eps_theta = self.denoiser(x_t, t.reshape(bs, 1))
         # print(t)
@@ -187,10 +184,10 @@ class LatentDiffusion(pl.LightningModule):
                 # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
                 bs = min(max_batch_size, n_sample - i)
                 shape = (bs,*self.latent_shape)
-                latents = self.ddpm.sample_backward(shape, self.denoiser, device=device, simple_var=simple_var)
+                latents = self.noise_scheduler.sample_backward(shape, self.denoiser, device=device, simple_var=simple_var)
                 imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
                 
-                print("in sample images: ",imgs.max(),imgs.min())
+                print("in sample images: ",imgs.max(),imgs.min(),imgs.shape)
                 # imgs = (imgs + 1) / 2 * 255
                 # imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)#.numpy()
                 output_file = os.path.join(output_dir,name )

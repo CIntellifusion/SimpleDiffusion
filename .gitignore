@@ -4,3 +4,4 @@ logs
 .cache
 checkpoints
 sample
+lightning_logs

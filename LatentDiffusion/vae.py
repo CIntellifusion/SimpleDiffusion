@@ -16,7 +16,8 @@ class VAE(nn.Module):
     def __init__(self, 
                 encoder_config,
                 decoder_config,
-                 device="cuda"):
+                device="cuda"
+                ):
         super(VAE, self).__init__()
         self.encoder = instantiate_from_config(encoder_config)
         self.decoder = instantiate_from_config(decoder_config)
@@ -24,7 +25,7 @@ class VAE(nn.Module):
     
     def reparameterization(self, mean, var):
         epsilon = torch.randn_like(var,device = self.device)#.to(DEVICE)        # sampling epsilon        
-        z = mean + var*epsilon                          # reparameterization trick
+        z = mean + var * epsilon                          # reparameterization trick
         return z
     
     def encode(self,x):
@@ -38,11 +39,11 @@ class VAE(nn.Module):
     
     def sample(self,n_sample):
         return self.decoder.sample(n_sample)
+    
     def forward(self, x):
         mean, log_var = self.encoder(x)
         z = self.reparameterization(mean, torch.exp(0.5 * log_var)) # takes exponential function (log var -> var)
         x_hat  = self.decoder(z)
-        
         return x_hat, mean, log_var
 
     def loss_fn(self,x, x_hat, mean, log_var):
@@ -55,8 +56,8 @@ class VAE(nn.Module):
         # print("x max min",x.max(),x.min(),x_hat.max(),x_hat.min());exit()
         reproduction_loss = nn.functional.binary_cross_entropy(x_hat, x, reduction='sum')
         KLD      = - 0.5 * torch.sum(1+ log_var - mean.pow(2) - log_var.exp())
-        return reproduction_loss + KLD
-        # return KLD 
+        perceptual_loss = torch.tensor(0.0)
+        return reproduction_loss + KLD + perceptual_loss
 
 
 class VAETrainer(pl.LightningModule):
