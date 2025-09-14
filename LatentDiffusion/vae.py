@@ -12,6 +12,14 @@ import pytorch_lightning as pl
 import argparse 
 from omegaconf import OmegaConf
 from util import instantiate_from_config
+class VAELegacy(nn.Module):
+    def __init__(self):
+        super(VAELegacy, self).__init__()
+        self.identity = torch.nn.Identity()
+    def decode(self,x):
+        return self.identity(x)
+    def encode(self,x):
+        return self.identity(x)
 class VAE(nn.Module):
     def __init__(self, 
                 encoder_config,
@@ -86,7 +94,6 @@ class VAETrainer(pl.LightningModule):
         self.sample_output_dir = sample_output_dir
         self.sample_epoch_interval = sample_epoch_interval
 
-
     def forward(self, batch):
         x, _ = batch
         # x = x.view(self.batch_size, x_dim)
@@ -109,13 +116,13 @@ class VAETrainer(pl.LightningModule):
         self.log('learning_rate', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False)
         return loss
     
-
     def sample_images(self, output_dir, n_sample=10, device="cuda", simple_var=True):
         output_file =  os.path.join(output_dir , "generated_images.png")
         with torch.no_grad():
             # noise = torch.randn(n_sample, latent_dim)#.to(DEVICE)
             generated_images = self.model.sample(n_sample)
             save_image(generated_images.view(n_sample,*self.image_shape),output_file, nrow=5, normalize=True)
+            
     def on_fit_start(self):
         output_dir = os.path.join(self.sample_output_dir, 'init_ckpt')
         os.makedirs(output_dir,exist_ok=True)
@@ -129,7 +136,6 @@ class VAETrainer(pl.LightningModule):
             self.sample_images(output_dir=output_dir,n_sample=25,device="cuda",simple_var=True)    
 
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script')
     ## epoch 200 with loss 0.02 is enough to generate on mnist 
@@ -140,6 +146,7 @@ def parse_args():
     args = parser.parse_args()
 
     return args
+
 # 尽量不要用可变的变量作为参数，这样更改了之后又bug不知道
 # 重要参数不默认， 默认参数不重要
 # 硬编码的地方要写注释 反之后来不知道为什么 

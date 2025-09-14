@@ -1,0 +1,3 @@
+pytorch_lighting
+omegaconf
+tensorboardX

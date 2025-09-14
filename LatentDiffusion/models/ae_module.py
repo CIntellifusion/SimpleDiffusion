@@ -50,6 +50,7 @@ class SimpleDecoder(nn.Module):
     A more complex implementation of Resnet Encoder with Attention
     reference: lvdm/moddules/ae_modules.py
 """
+
 def Normalize(in_channels,num_groups=16):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-5)
 
@@ -157,6 +158,7 @@ class Upsample(nn.Module):
         if self.with_conv:
             x = self.conv(x)
         return x
+    
 def get_timestep_embedding(timesteps, embedding_dim):
     """
     This matches the implementation in Denoising Diffusion Probabilistic Models:

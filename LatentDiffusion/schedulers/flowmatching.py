@@ -6,18 +6,23 @@ class FlowMatching(nn.Module):
         super().__init__()
         self.num_timesteps = num_timesteps
         
-    def sample_forward(self, x, t,eps=None):
+    def sample_forward(self, x1, t):
+        # x0 = noise ; x1 = data 
+        # t \in [0,N)
+        # from sigma=0 to sigma=1, the noise level decreases
         # linear interpolation 
-        x_0 = torch.randn_like(x)
-        t = t.view(-1,1,1,1) / self.num_timesteps
-        # print(x.shape,t.shape)
-        # import pdb; pdb.set_trace()
-        x_t = t * x + (1-t) * x_0 
-        return x_t 
+        x0 = torch.randn_like(x1).to(x1.device)
+        sigma = t.view(-1,1,1,1) / self.num_timesteps
+        xt = sigma * x1 + (1-sigma) * x0
+        # xt' = sigma' * x1 + (1-sigma') * x0
+        # xt' - xt = (sigma'-sigma) * x1 + (sigma-sigma') * x0
+        #        = (sigma'-sigma) * (x1 - x0)
+        # xt' = xt + (sigma'-sigma) * (x1 - x0)
+        return xt ,  x1-x0  
     
-    def sample_backward_step(self, net, x_t, t):
-        pred_v = net(x_t, t)
-        x_next = x_t + pred_v / self.num_timesteps
+    def sample_backward_step(self, net, xt, t):
+        pred_v = net(xt, t)
+        x_next = xt + pred_v / self.num_timesteps
         return x_next
     
     @torch.no_grad()

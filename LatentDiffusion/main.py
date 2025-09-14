@@ -16,7 +16,8 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from util import instantiate_from_config
 from util import images2gif
-imsize = 32 
+# imsize = 32 
+torch.set_float32_matmul_precision('high')
 """ 
 an simple overview of the code structure
 for a diffusion generator , we need to define: 
@@ -51,7 +52,7 @@ class LatentDiffusion(pl.LightningModule):
                  noise_scheduler_config = {},
                  unet_config = {},
                  vae_config = {},
-                 vae_pretrained_path = None
+                 vae_pretrained_path = ''
                  ):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
@@ -60,9 +61,9 @@ class LatentDiffusion(pl.LightningModule):
         print("===================")
         print(vae_config)
         self.vae = instantiate_from_config(vae_config)
-        self.latent_shape = self.vae.decoder.z_shape[1:]
+        self.latent_shape = [3,64,64]
         unet_config["params"]["n_steps"]=N
-        unet_config["params"]["latent_shape"]=self.latent_shape
+        unet_config["params"]["latent_shape"]=[3,64,64]
         self.denoiser = instantiate_from_config(unet_config)
         self.vae_config = vae_config
         self.config_vae(vae_pretrained_path)
@@ -78,7 +79,11 @@ class LatentDiffusion(pl.LightningModule):
         self.sample_epoch_interval = sample_epoch_interval
         
     def config_vae(self,pretrained_path):
-        ckpt = torch.load(pretrained_path,weights_only=False)
+        if os.path.exists(pretrained_path) is False:
+            print("no pretrained vae found, use identity mapping")
+            return 
+        else:
+            ckpt = torch.load(pretrained_path,weights_only=False)
         if "state_dict" in ckpt.keys():
             ckpt = ckpt["state_dict"]
         new_state_dict = {}
@@ -150,13 +155,12 @@ class LatentDiffusion(pl.LightningModule):
         # latents = latents.reshape(bs,*self.latent_shape)
         # print("forward ae reshaped encode shape",latents.shape)
         t = torch.randint(0,self.N,(bs,),device = latents.device)
-        eps = torch.randn_like(latents,device=latents.device)
-        x_t = self.noise_scheduler.sample_forward(latents, t, eps)
+        x_t,gt = self.noise_scheduler.sample_forward(latents, t)
         # print(latents.max(),latents.min(),x_t.max(),x_t.min())
-        eps_theta = self.denoiser(x_t, t.reshape(bs, 1))
+        model_output = self.denoiser(x_t, t.reshape(bs, 1))
         # print(t)
         # print("training ",eps.max(),x_t.max(),eps_theta.max())
-        loss = self.criterion(eps,eps_theta)
+        loss = self.criterion(gt,model_output)
         return loss 
     
     def validation_step(self, batch, batch_idx):
@@ -167,8 +171,9 @@ class LatentDiffusion(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         batch = self.get_input(batch)
+        # print("training step input shape",batch.shape,batch.max(),batch.min())
         loss = self(batch)
-        self.log('train_loss', loss)
+        self.log('train_loss', loss,on_step=True, on_epoch=True, prog_bar=True)
         self.log('learning_rate', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False)
         return loss
 
