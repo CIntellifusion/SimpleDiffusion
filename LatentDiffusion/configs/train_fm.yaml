@@ -6,7 +6,7 @@ trainer:
   params:
     max_epochs: 20 
     accelerator: gpu
-    devices: 1 
+    devices: 4
 
 model:
   target: main.LatentDiffusion
@@ -73,7 +73,7 @@ model:
                 use_linear_attn: False
                 use_checkpoint: False
 
-    unet_config:
+    model_config:
         target: models.unet.UNet
         params:
           channels: [64,128,128,32]

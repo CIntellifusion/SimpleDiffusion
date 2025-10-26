@@ -29,7 +29,7 @@ model:
     vae_config:
       target: vae.VAELegacy
 
-    unet_config:
+    model_config:
         target: models.unet.UNet
         params:
           channels: [64,128,128,32]

@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 import torch 
 from datasets import load_dataset
-imsize = 64 
+imsize = 64
 ### data
 class MNISTDataModule(pl.LightningDataModule):
     def __init__(self, data_dir="./", batch_size=64,num_workers=63,imsize=28):
@@ -71,26 +71,22 @@ class CelebDataModule(pl.LightningDataModule):
             self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
     @staticmethod
     def collate_fn(batch):
-        # for example in batch:
-        #     image = example['image']
-        #     image.save("/home/haoyu/research/simplemodels/cache/test.jpg")
         transform = transforms.Compose([
-            transforms.Resize((imsize,imsize)),  
-            transforms.ToTensor(),           
-            # transforms.Normalize((0.5,0.5,0.5),(0.5,0.5,0.5))  # Normalize images
-            # transforms.Lambda(lambda x: (x - 0.5) * 2) # unconment 
+            transforms.Resize((imsize, imsize)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), # Normalize images
+            # transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
         ])
         transformed_batch = torch.stack([transform(example['image']) for example in batch])
-        # print("transformerd",transformed_batch.mean(),transformed_batch.min(),transformed_batch.max())
-        
+        # print(transformed_batch.shape,transformed_batch.max(),transformed_batch.min())
         return transformed_batch,None
 
     def apply_transform(self, example):
         transform = transforms.Compose([
             transforms.Resize((self.imsize, self.imsize)),
             transforms.ToTensor(),
-            # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Normalize images
-            # transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), # Normalize images
+            transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
         ])
         return {"image":transform(example['image'])}
 
@@ -99,11 +95,11 @@ class CelebDataModule(pl.LightningDataModule):
                           batch_size=self.batch_size, 
                           collate_fn=self.collate_fn, 
                           shuffle=True, num_workers=self.num_workers,
-                          pin_memory=True)
+                          pin_memory=True,drop_last=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, 
                           batch_size=self.batch_size, 
                           collate_fn=self.collate_fn, 
                           num_workers=self.num_workers,
-                          pin_memory=True)
+                          pin_memory=True,drop_last=True )

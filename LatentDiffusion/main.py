@@ -8,6 +8,7 @@ import argparse
 from omegaconf import OmegaConf
 import torch
 import torch.nn as nn
+import numpy as np 
 from torchvision.utils import save_image
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 ### local files 
@@ -40,19 +41,19 @@ during the inference stage:
 ### trainer 
 class LatentDiffusion(pl.LightningModule):
     def __init__(self, 
-                 batch_size=512, 
                  lr=0.001,
                  N=1000,
                  imsize=32,
-                 num_workers=63,
                  channels = 1,
                  scheduler = "CosineAnnealingLR",
                  sample_output_dir = "./samples",
                  sample_epoch_interval = 20,
                  noise_scheduler_config = {},
-                 unet_config = {},
+                 model_config = {},
                  vae_config = {},
-                 vae_pretrained_path = ''
+                 vae_pretrained_path = '',
+                 model_pretrained_path = '',
+                 loss_type="flow_matching"
                  ):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
@@ -62,21 +63,33 @@ class LatentDiffusion(pl.LightningModule):
         print(vae_config)
         self.vae = instantiate_from_config(vae_config)
         self.latent_shape = [3,64,64]
-        unet_config["params"]["n_steps"]=N
-        unet_config["params"]["latent_shape"]=[3,64,64]
-        self.denoiser = instantiate_from_config(unet_config)
+        # model_config["params"]["n_steps"]=N
+        # model_config["params"]["latent_shape"]=[3,64,64]
+        self.denoiser = instantiate_from_config(model_config)
         self.vae_config = vae_config
         self.config_vae(vae_pretrained_path)
         self.criterion = nn.MSELoss()
         self.N = N 
         self.lr = lr 
-        self.batch_size = batch_size
-        self.num_workers = num_workers
         self.scheduler = scheduler
         self.image_shape = image_shape
 
         self.sample_output_dir = sample_output_dir
         self.sample_epoch_interval = sample_epoch_interval
+        
+        self.loss_type = loss_type
+        if model_pretrained_path != '':
+            self.load_state_dict(torch.load(model_pretrained_path,weights_only=False)['state_dict'],strict=True)
+        
+        if self.loss_type == "simple_consistency_distillation":
+            print(f"creating reference model for consistency distillation")
+            self.ref_model = instantiate_from_config(model_config)
+            denoiser_state_dict = self.denoiser.state_dict()
+            self.ref_model.load_state_dict(denoiser_state_dict,strict=True)
+            self.ref_model.eval()
+            for param in self.ref_model.parameters():
+                param.requires_grad = False
+                
         
     def config_vae(self,pretrained_path):
         if os.path.exists(pretrained_path) is False:
@@ -100,7 +113,6 @@ class LatentDiffusion(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.denoiser.parameters(), lr=self.lr)
         if self.scheduler == "ReduceLROnPlateau":
-            
             scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True)
             return {
                 'optimizer': optimizer,
@@ -112,8 +124,7 @@ class LatentDiffusion(pl.LightningModule):
             }
         elif self.scheduler == "CosineAnnealingLR":
             from torch.optim.lr_scheduler import CosineAnnealingLR
-            self.scheduler = CosineAnnealingLR(optimizer, T_max=10)  # 定义CosineAnnealingLR调度器
-            
+            self.scheduler = CosineAnnealingLR(optimizer, T_max=50)  # 定义CosineAnnealingLR调度器
             return {
                 'optimizer': optimizer,
                 'lr_scheduler': self.scheduler
@@ -128,10 +139,6 @@ class LatentDiffusion(pl.LightningModule):
         else:
             return optimizer
     
-    def lr_scheduler_step(self, epoch, batch_idx, optimizer,**kwargs):
-        # Manually update the learning rate based on the scheduler
-        if self.scheduler is not None:
-            self.scheduler.step()  # Update the scheduler
     
     def AE_encode(self,x):
         # x = torch.concat(x)
@@ -144,25 +151,74 @@ class LatentDiffusion(pl.LightningModule):
         return self.vae.decode(x) 
             
     def get_input(self,batch):
-        images,_= batch
+        images,_ = batch
         return self.AE_encode(images)
     
     def forward(self, batch):
-        # print(batch)
+        # unconditional generation , no class label
         latents = batch 
-        bs = latents.shape[0]
-        # print("forward ae encode shape",latents.shape)
-        # latents = latents.reshape(bs,*self.latent_shape)
-        # print("forward ae reshaped encode shape",latents.shape)
-        t = torch.randint(0,self.N,(bs,),device = latents.device)
-        x_t,gt = self.noise_scheduler.sample_forward(latents, t)
-        # print(latents.max(),latents.min(),x_t.max(),x_t.min())
-        model_output = self.denoiser(x_t, t.reshape(bs, 1))
-        # print(t)
-        # print("training ",eps.max(),x_t.max(),eps_theta.max())
-        loss = self.criterion(gt,model_output)
+        # latents range : [-1,1]
+        # latents shape : B,C,H,W 
+        # t range : [0,1]
+        loss_type = self.loss_type
+        # print("loss type: ",loss_type)
+        if loss_type == "flow_matching":
+            bs = latents.shape[0]
+            t = torch.rand((bs,1),device = latents.device)
+            sigma = t.reshape(bs,1,1,1)
+            x_t,target = self.noise_scheduler.sample_forward(latents, sigma)
+            model_output = self.denoiser(x_t, t)
+            loss = self.criterion(target,model_output)
+        elif loss_type == "simple_consistency_distillation":
+            bs = latents.shape[0]
+            t = torch.rand((bs,1),device = latents.device)
+            # re-name
+            data = latents
+            sigma = t.reshape(bs,1,1,1)
+            # sample forward 
+            noise = torch.randn_like(data).to(data.device)
+            # import pdb; pdb.set_trace()
+            # print(f"noise size : {noise.shape}, data size: {data.shape} sigma size: {sigma.shape}")
+            x_t = sigma * data + (1-sigma)  * noise
+            target = data - noise
+            # get velocity 
+            # import pdb ; pdb.set_trace()
+            assert hasattr(self,"ref_model")
+            with torch.no_grad():
+                cuda_state = torch.cuda.get_rng_state()
+                ref_velocity = self.ref_model(x_t, t)
+            
+            def model_wrapper(x_t, t):
+                torch.cuda.set_rng_state(cuda_state)
+                output = self.denoiser(x_t, t)
+                return output
+            
+            # Compute average velocity via JVP
+            v_t = torch.ones_like(t)
+            sigma_end = torch.ones_like(sigma)
+            F_avg, F_avg_grad = torch.func.jvp(model_wrapper, (x_t, t), (ref_velocity, v_t))
+            F_avg_grad = F_avg_grad.detach()
+            F_avg_sg = F_avg.detach()
+            # Compute average velocity target
+            v_bar = ref_velocity + (sigma_end - sigma) * F_avg_grad
+            g = F_avg_sg - v_bar
+            # Compute interpolated target with relaxation
+            alpha = 1 - sigma  ** 0.5 
+            target = F_avg_sg - alpha * g.clamp(min=-1, max=1)
+
+            # Weight CM loss by time
+            beta = torch.cos(sigma * np.pi / 2).flatten()
+            cm_loss = self.norm_l2_loss(F_avg, target) * beta.flatten()
+            loss = cm_loss.mean()
+            
         return loss 
-    
+
+    def norm_l2_loss(self, pred, target, p=0.5, c=1e-3):
+        """Norm L2 loss with outlier resistance"""
+        e = torch.mean((pred - target) ** 2, dim=(1, 2, 3), keepdim=False)
+        loss = e / (e + c).pow(p).detach()
+        return loss
+
     def validation_step(self, batch, batch_idx):
         batch = self.get_input(batch)
         val_loss = self(batch)
@@ -174,7 +230,7 @@ class LatentDiffusion(pl.LightningModule):
         # print("training step input shape",batch.shape,batch.max(),batch.min())
         loss = self(batch)
         self.log('train_loss', loss,on_step=True, on_epoch=True, prog_bar=True)
-        self.log('learning_rate', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False)
+        self.log('lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False,prog_bar=True)
         return loss
 
 
@@ -189,19 +245,56 @@ class LatentDiffusion(pl.LightningModule):
                 # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
                 bs = min(max_batch_size, n_sample - i)
                 shape = (bs,*self.latent_shape)
-                latents = self.noise_scheduler.sample_backward(shape, self.denoiser, device=device, simple_var=simple_var)
+                latents = self.noise_scheduler.sample_backward(shape,50, self.denoiser, device=device, simple_var=simple_var)
                 imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
-                
-                print("in sample images: ",imgs.max(),imgs.min(),imgs.shape)
-                # imgs = (imgs + 1) / 2 * 255
-                # imgs = imgs.clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)#.numpy()
-                output_file = os.path.join(output_dir,name )
+                # imgs expected range [-1,1]
+                output_file = os.path.join(output_dir,name)
                 channels,h,w = self.image_shape
                 save_image(imgs.view(n_sample,channels,h,w),output_file, nrow=3, normalize=True)
     
+    
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        if self.global_step % 100 ==0:
+            print(f"train batch {batch_idx} finished")
+            output_dir = os.path.join(self.sample_output_dir, f'global_step={self.global_step:05}')
+            self.denoiser.eval()
+            os.makedirs(output_dir, exist_ok=True)
+            with torch.no_grad():
+                bs = 9
+                shape = (bs,*self.latent_shape)
+                if self.loss_type == "simple_consistency_distillation":
+                    for sample_steps in [1,2,4,8]:
+                        latents = self.noise_scheduler.consistency_sample(shape,sample_steps, self.denoiser, device="cuda")
+                        imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
+                        # imgs expected range [-1,1]
+                        name = f"generated_images_samples={sample_steps}steps.png"
+                        output_file = os.path.join(output_dir,name)
+                        channels,h,w = self.image_shape
+                        save_image(imgs.view(bs,channels,h,w),output_file, nrow=3, normalize=True)
+                elif self.loss_type == "flow_matching":
+                    self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)
+    def on_train_start(self):
+        # create sample output dir 
+        output_dir = os.path.join(self.sample_output_dir, f'global_step=0')
+        os.makedirs(output_dir, exist_ok=True)
+        if self.loss_type == "simple_consistency_distillation":
+            bs = 9
+            shape = (bs,*self.latent_shape)
+            for sample_steps in [1,2,4,8]:
+                latents = self.noise_scheduler.consistency_sample(shape,sample_steps, self.denoiser, device="cuda")
+                imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
+                # imgs expected range [-1,1]
+                name = f"generated_images_samples={sample_steps}steps.png"
+                output_file = os.path.join(output_dir,name)
+                channels,h,w = self.image_shape
+                save_image(imgs.view(bs,channels,h,w),output_file, nrow=3, normalize=True)
+        elif self.loss_type == "flow_matching":
+            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)
+        # import pdb; pdb.set_trace()
+        
     def on_train_epoch_end(self):
         if (self.current_epoch + 1)  % self.sample_epoch_interval==0:
-            output_dir = os.path.join(self.sample_output_dir, f'{self.current_epoch+1:05}')
+            output_dir = os.path.join(self.sample_output_dir, f'epoch={self.current_epoch+1:05}')
             self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)    
 
     # after training , call imagetogif
@@ -239,20 +332,25 @@ if __name__ == "__main__":
         data_module.prepare_data()
         data_module.setup()
         model = instantiate_from_config(config.model)
-        
+        logger = pl.loggers.TensorBoardLogger("logs/", name=expname)
+        log_dir_path = logger.log_dir
+        print(f"Log directory: {log_dir_path}")
+        sample_output_dir = os.path.join(log_dir_path, "samples")
+        model.sample_output_dir = sample_output_dir
+        print("model sample output_dir is replaced to ", sample_output_dir)
         # 设置保存 checkpoint 的回调函数
         checkpoint_callback = ModelCheckpoint(
-            dirpath=f"./checkpoints/{expname}",  # 保存 checkpoint 的目录
+            dirpath=os.path.join(log_dir_path,"checkpoints"),  # 保存 checkpoint 的目录
             filename="model-{epoch:02d}-{val_loss:.5f}",  # checkpoint 文件名格式
-            monitor="val_loss",  # 监控的指标，这里使用验证集损失
-            mode="min",  # 指定监控模式为最小化验证集损失
-            save_top_k=3,  # 保存最好的 3 个 checkpoint
+            # monitor="val_loss",  # 监控的指标，这里使用验证集损失
+            # mode="min",  # 指定监控模式为最小化验证集损失
+            # save_top_k=3,  # 保存最好的 3 个 checkpoint
             verbose=True
         )
         trainer_config = config.trainer.params
         trainer = pl.Trainer(
             **trainer_config,
-            logger=pl.loggers.TensorBoardLogger("logs/", name=expname),
+            logger=logger,
             callbacks=[checkpoint_callback],  # 注册 checkpoint 回调函数
         )
         if config.pretrain_path != "None":

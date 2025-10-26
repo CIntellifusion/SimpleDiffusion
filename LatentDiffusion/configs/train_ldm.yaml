@@ -31,7 +31,7 @@ model:
           resolution: 64
           in_channels: 3
           device: cuda:0  # or cpu
-    unet_config:
+    model_config:
         target: models.unet.UNet
         params:
           channels: [64,128,128,32]

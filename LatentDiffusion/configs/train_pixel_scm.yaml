@@ -4,23 +4,23 @@ pretrain_path :
 trainer:
   target: pytorch_lightning.Trainer
   params:
-    max_epochs: 100 
+    max_epochs: 20 
     accelerator: gpu
-    devices: 4
+    devices: 1 
 
 model:
   target: main.LatentDiffusion
   params:
     imsize: 64
     channels: 3
-    lr: 1e-3
+    lr: 1e-4
     scheduler: CosineAnnealingLR
-    sample_output_dir: "./sample/celeb_config"
+    sample_output_dir: "./sample/scm_celeb_config"
     sample_epoch_interval: 1
 
     noise_scheduler_config:
       target: schedulers.flowmatching.FlowMatching
-        
+ 
     vae_config:
       target: vae.VAELegacy
 
@@ -35,12 +35,15 @@ model:
           mlp_ratio: 4.0 
           learn_sigma: False  
           use_gradient_checkpointing: False 
-    loss_type: "flow_matching"
+    
+    # model_pretrained_path: "checkpoints/flowmatching/flow_matching.ckpt"
+    model_pretrained_path: "/pfs/haoyu/research/SimpleDiffusion/LatentDiffusion/checkpoints/flowmatching/model-epoch=19-val_loss=0.08590.ckpt"
+    loss_type: "simple_consistency_distillation"
 
 data:
   target: data.data_wrapper.CelebDataModule
   params:
     data_dir: nielsr/CelebA-faces
-    batch_size: 128
-    num_workers: 32
+    batch_size: 4
+    num_workers: 16
     imsize : 64
