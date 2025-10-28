@@ -1,4 +1,4 @@
-expname: flowmatching 
+expname: consistency_distillation 
 imsize: 64
 pretrain_path :  
 trainer:

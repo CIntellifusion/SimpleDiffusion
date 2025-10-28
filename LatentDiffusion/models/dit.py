@@ -232,6 +232,8 @@ class TimestepEmbedder(nn.Module):
 class DiT(nn.Module):
     def __init__(self, 
                  in_channels: int=3,
+                 imsize: int=64,
+                 patch_size: int=2,
                  pos_emb_type = "learned1d",
                  hidden_size: int=512,
                  depth : int=12,
@@ -249,9 +251,8 @@ class DiT(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.learn_sigma = learn_sigma
         self.use_gradient_checkpointing = use_gradient_checkpointing
-        input_size=64 
-        patch_size = 2
-        self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        
+        self.x_embedder = PatchEmbed(imsize, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.num_patches = self.x_embedder.num_patches
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, hidden_size), requires_grad=False)
@@ -294,6 +295,72 @@ class DiT(nn.Module):
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
         return x
 
+
+class LabelEmbedder(nn.Module):
+    """
+    Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
+    Same as DiT.
+    """
+    def __init__(self, num_classes, hidden_size, dropout_prob, disable_label_dropout=False):
+        super().__init__()
+        use_cfg_embedding = dropout_prob > 0
+        self.embedding_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
+        self.num_classes = num_classes
+        self.dropout_prob = dropout_prob
+        if disable_label_dropout:
+            self.dropout_prob = 0
+
+    def token_drop(self, labels, force_drop_ids=None):
+        """
+        Drops labels to enable classifier-free guidance.
+        """
+        if force_drop_ids is None:
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids == 1
+        labels = torch.where(drop_ids, self.num_classes, labels)
+        return labels
+
+    
+    def forward(self, labels, train, force_drop_ids=None):
+        use_dropout = self.dropout_prob > 0
+        if (train and use_dropout) or (force_drop_ids is not None):
+            labels = self.token_drop(labels, force_drop_ids)
+        embeddings = self.embedding_table(labels)
+        return embeddings
+
+
+class ConditionalDiT(DiT):
+    def __init__(self, 
+                 in_channels: int=3,
+                 pos_emb_type = "learned1d",
+                 hidden_size: int=512,
+                 depth : int=12,
+                 num_heads: int=8,
+                 mlp_ratio: float=4.0,
+                 learn_sigma : bool = True,
+                 use_gradient_checkpointing : bool = False,
+                 disable_label_dropout=False,
+                 num_classes: int = 1000,
+                 class_dropout_prob: float = 0.1):
+        super().__init__(in_channels,pos_emb_type,hidden_size,depth,num_heads,mlp_ratio,learn_sigma,use_gradient_checkpointing)
+        self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob, disable_label_dropout)
+    def forward(self, x, t, cond):
+        # x: nchw 
+        x = self.x_embedder(x)+self.pos_embed  # (B, num_patches, hidden_size)
+        t = self.t_embedder(t)
+        cond_emb = self.y_embedder(cond,self.training)
+        t = t + cond_emb
+        B, N, C = x.shape
+        assert N == self.num_patches, f"Input sequence length {N} doesn't match num_patches {self.num_patches}"
+        for block in self.blocks:
+            if self.use_gradient_checkpointing and self.training:
+                x = torch.utils.checkpoint.checkpoint(block, x, t)
+            else:
+                x = block(x, t)
+        x = self.final_layer(x, t)
+        x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        return x
 if __name__ == "__main__":
     DiT_model = DiT(
         out_channels=3,

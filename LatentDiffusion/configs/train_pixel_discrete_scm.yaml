@@ -19,8 +19,9 @@ model:
     sample_epoch_interval: 1
 
     noise_scheduler_config:
-      target: schedulers.flowmatching.FlowMatching
- 
+      target: schedulers.flowmatching.DiscreteFlowMatching
+      
+    timestep_inverse: True
     vae_config:
       target: vae.VAELegacy
 
@@ -35,11 +36,8 @@ model:
           mlp_ratio: 4.0 
           learn_sigma: False  
           use_gradient_checkpointing: False 
-    
-    # model_pretrained_path: "checkpoints/flowmatching/flow_matching.ckpt"
-    # model_pretrained_path: "logs/flowmatching/version_38/checkpoints/model-epoch=49-val_loss=0.11156.ckpt"
-    # model_pretrained_path: "logs/flowmatching/version_38/checkpoints/model-epoch=30.ckpt"
-    model_pretrained_path: "logs/fm/version_1/checkpoints/model-epoch=33-val_loss=0.10514.ckpt"
+  
+    model_pretrained_path: "logs/discrete_fm/version_0/checkpoints/model-epoch=03-val_loss=0.12274.ckpt"
     loss_type: "simple_consistency_distillation"
 
 data:

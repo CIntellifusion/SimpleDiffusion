@@ -4,7 +4,8 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 import torch 
 from datasets import load_dataset
-imsize = 64
+from functools import partial
+# imsize = 64 
 ### data
 class MNISTDataModule(pl.LightningDataModule):
     def __init__(self, data_dir="./", batch_size=64,num_workers=63,imsize=28):
@@ -44,6 +45,7 @@ class CelebDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.imsize = imsize 
+        
     def split_dataset(self, dataset, split_ratio=0.2):
         """
         Divides the dataset into training and validation sets.
@@ -70,13 +72,14 @@ class CelebDataModule(pl.LightningDataModule):
         if stage == 'fit' or stage is None:
             self.train_dataset, self.val_dataset = self.split_dataset(self.dataset['train'], split_ratio=0.2)
     @staticmethod
-    def collate_fn(batch):
+    def collate_fn(batch,imsize=32):
         transform = transforms.Compose([
             transforms.Resize((imsize, imsize)),
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), # Normalize images
             # transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
         ])
+        # print(f"example keys: {batch[0].keys()}")
         transformed_batch = torch.stack([transform(example['image']) for example in batch])
         # print(transformed_batch.shape,transformed_batch.max(),transformed_batch.min())
         return transformed_batch,None
@@ -91,6 +94,49 @@ class CelebDataModule(pl.LightningDataModule):
         return {"image":transform(example['image'])}
 
     def train_dataloader(self):
+        
+        collate_fn = partial(self.collate_fn,imsize=self.imsize)
+        return DataLoader(self.train_dataset,
+                          batch_size=self.batch_size, 
+                          collate_fn=collate_fn, 
+                          shuffle=True, num_workers=self.num_workers,
+                          pin_memory=True,drop_last=True)
+
+    def val_dataloader(self):
+        collate_fn = partial(self.collate_fn,imsize=self.imsize)
+        return DataLoader(self.val_dataset, 
+                          batch_size=self.batch_size, 
+                          collate_fn=collate_fn, 
+                          num_workers=self.num_workers,
+                          pin_memory=True,drop_last=True)
+
+class CIFAR100DataModule(pl.LightningDataModule):
+    def __init__(self,data_dir="./",batch_size=64,num_workers=63,imsize=32):
+        super().__init__()
+        self.data_dir = data_dir
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.imsize = imsize 
+    def prepare_data(self):
+        self.dataset = load_dataset("cifar100")#.map(self.apply_transform)
+        # self.dataset = self.dataset.with_transform(self.apply_transform)
+    def setup(self, stage=None, transform=None):
+        if stage == 'fit' or stage is None:
+            self.train_dataset = self.dataset['train']
+            self.val_dataset = self.dataset['test']
+    
+    @staticmethod
+    def collate_fn(batch):
+        transform = transforms.Compose([
+            transforms.Resize((32, 32)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), # Normalize images
+            # transforms.Lambda(lambda x: (x - 0.5) * 2)  # Uncomment to normalize
+        ])
+        transformed_batch = torch.stack([transform(example['img']) for example in batch])
+        return transformed_batch,None
+
+    def train_dataloader(self):
         return DataLoader(self.train_dataset,
                           batch_size=self.batch_size, 
                           collate_fn=self.collate_fn, 
@@ -102,4 +148,4 @@ class CelebDataModule(pl.LightningDataModule):
                           batch_size=self.batch_size, 
                           collate_fn=self.collate_fn, 
                           num_workers=self.num_workers,
-                          pin_memory=True,drop_last=True )
+                          pin_memory=True,drop_last=True)

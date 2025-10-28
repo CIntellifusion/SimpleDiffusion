@@ -1,34 +1,22 @@
 expname: flowmatching 
 imsize: 64
-pretrain_path:  # "logs/flowmatching/version_38/checkpoints/model-epoch=99.ckpt"
-
+pretrain_path:  
 trainer:
   target: pytorch_lightning.Trainer
   params:
-    max_epochs: 200 
+    max_epochs: 100 
     accelerator: gpu
-    devices: auto
+    devices: 4
 
 model:
   target: main.LatentDiffusion
   params:
-    imsize: ${imsize}
+    imsize: 64
     channels: 3
-    optimizer_params:
-      lr: 1e-3
-      weight_decay: 0.0
-      beta: 0.95
-      eps: 1e-8
-
-    lr_scheduler_config: 
-      target: torch.optim.lr_scheduler.StepLR
-      params: 
-        step_size: 10000 
-        gamma: 0.8 
-      
+    lr: 1e-5
+    scheduler: LinearLR
     sample_output_dir: "./sample/celeb_config"
     sample_epoch_interval: 1
-    sample_step_interval: 1000
 
     noise_scheduler_config:
       target: schedulers.flowmatching.FlowMatching
@@ -39,9 +27,7 @@ model:
     model_config:
         target: models.dit.DiT
         params:
-          imsize: ${imsize}
-          patch_size: 2 
-          in_channels: ${model.params.channels}
+          in_channels: 3
           pos_emb_type: "learned1d"
           hidden_size: 512
           depth: 12
@@ -50,11 +36,12 @@ model:
           learn_sigma: False  
           use_gradient_checkpointing: False 
     loss_type: "flow_matching"
+    model_pretrained_path: "logs/flowmatching/version_38/checkpoints/model-epoch=99.ckpt"
 
 data:
-  target: data.data_wrapper.CelebDataModule
+  target: data.data_wrapper.CIFAR100DataModule
   params:
-    data_dir: nielsr/CelebA-faces
+    data_dir: uoft-cs/cifar100
     batch_size: 128
     num_workers: 32
-    imsize : ${imsize}
+    imsize : 64

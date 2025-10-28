@@ -1,10 +1,10 @@
-expname: simple_consistency 
+expname: flowmatching 
 imsize: 64
 pretrain_path :  
 trainer:
   target: pytorch_lightning.Trainer
   params:
-    max_epochs: 10
+    max_epochs: 100 
     accelerator: gpu
     devices: 4
 
@@ -13,14 +13,16 @@ model:
   params:
     imsize: 64
     channels: 3
-    lr: 1e-5
-    scheduler: CosineAnnealingLR
-    sample_output_dir: "./sample/scm_celeb_config"
+    lr: 1e-4
+    scheduler: LinearLR
+    sample_output_dir: "./sample/celeb_config"
     sample_epoch_interval: 1
 
     noise_scheduler_config:
-      target: schedulers.flowmatching.FlowMatching
- 
+      target: schedulers.flowmatching.DiscreteFlowMatching
+
+    timestep_inverse: True
+    
     vae_config:
       target: vae.VAELegacy
 
@@ -35,17 +37,12 @@ model:
           mlp_ratio: 4.0 
           learn_sigma: False  
           use_gradient_checkpointing: False 
+    loss_type: "flow_matching"
     
-    # model_pretrained_path: "checkpoints/flowmatching/flow_matching.ckpt"
-    # model_pretrained_path: "logs/flowmatching/version_38/checkpoints/model-epoch=49-val_loss=0.11156.ckpt"
-    # model_pretrained_path: "logs/flowmatching/version_38/checkpoints/model-epoch=30.ckpt"
-    model_pretrained_path: "logs/fm/version_1/checkpoints/model-epoch=33-val_loss=0.10514.ckpt"
-    loss_type: "simple_consistency_distillation"
-
 data:
   target: data.data_wrapper.CelebDataModule
   params:
     data_dir: nielsr/CelebA-faces
-    batch_size: 32
-    num_workers: 16
+    batch_size: 128
+    num_workers: 32
     imsize : 64
