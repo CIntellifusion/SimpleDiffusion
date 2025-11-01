@@ -5,3 +5,4 @@ imageio
 datasets
 einops
 tensorboard
+torch-fidelity

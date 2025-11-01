@@ -5,6 +5,7 @@ an simplified unconditional diffusion for image generation
 """
 import os
 import argparse
+from tqdm import trange
 from omegaconf import OmegaConf
 import torch
 import torch.nn as nn
@@ -251,7 +252,7 @@ class LatentDiffusion(pl.LightningModule):
         self.denoiser.eval()
         global_rank = self.global_rank 
         
-        for i in range(0, n_sample, max_batch_size):
+        for i in trange(0, n_sample, max_batch_size):
             # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
             bs = min(max_batch_size, n_sample - i)
             # print(f"bs {bs}")
