@@ -1,0 +1,7 @@
+omegaconf
+torch
+pytorch_lightning
+imageio 
+datasets
+einops
+tensorboard
