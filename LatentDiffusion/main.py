@@ -57,6 +57,8 @@ class LatentDiffusion(pl.LightningModule):
                  loss_type="flow_matching",
                  fix_val_noise=True,
                  timestep_inverse=False,
+                 r_config = None,
+                 scheduler_eps= 0.0 
                  ):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
@@ -90,7 +92,11 @@ class LatentDiffusion(pl.LightningModule):
             self.ref_model.eval()
             for param in self.ref_model.parameters():
                 param.requires_grad = False
-        
+            
+            self.r_config = r_config
+            assert self.r_config is not None
+            self.scheduler_eps = scheduler_eps 
+            
         self.fix_val_noise = fix_val_noise
         self.val_noise = None
         
@@ -176,6 +182,7 @@ class LatentDiffusion(pl.LightningModule):
 
             bs = latents.shape[0]
             t = torch.rand((bs,1),device = latents.device)
+            t = torch.clamp(t, self.scheduler_eps ,1.0 - self.scheduler_eps)
             # re-name
             data = latents
             sigma = t.reshape(bs,1,1,1)
@@ -186,6 +193,7 @@ class LatentDiffusion(pl.LightningModule):
             target = data - noise
             # get velocity 
             assert hasattr(self,"ref_model")
+            
             with torch.no_grad():
                 cuda_state = torch.cuda.get_rng_state()
                 if self.inverse:
@@ -205,7 +213,7 @@ class LatentDiffusion(pl.LightningModule):
             F_avg_grad = F_avg_grad.detach()
             F_avg_sg = F_avg.detach()
             # Compute average velocity target
-            r_factor = self.global_step / 10000
+            r_factor = min(self.r_config.r_factor_max, self.global_step / self.r_config.r_factor_warmup_steps) 
             v_bar = ref_velocity + (sigma_end - sigma) * F_avg_grad * r_factor
             g = F_avg_sg - v_bar 
             # Compute interpolated target with relaxation
@@ -237,22 +245,21 @@ class LatentDiffusion(pl.LightningModule):
         self.log('lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=False,prog_bar=True)
         return loss
 
-    def sample_images(self, output_dir, n_sample=9, device="cuda", simple_var=True):
-        max_batch_size = 32
+    def sample_images(self, output_dir, n_sample=9, device="cuda", simple_var=True,max_batch_size = 32,num_inference_step = 50,save_mode='batch'):
         self.to(device)
         os.makedirs(output_dir, exist_ok=True)
-        num_inference_step = 50 
         self.denoiser.eval()
+        global_rank = self.global_rank 
         
         for i in range(0, n_sample, max_batch_size):
             # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
             bs = min(max_batch_size, n_sample - i)
+            # print(f"bs {bs}")
             shape = (bs,*self.latent_shape)
-            
             if self.fix_val_noise:
                 if self.val_noise is None:
-                    bs = 9 
                     shape = (bs,*self.latent_shape)
+                    print(f'generating noise in rank={global_rank} with shape {shape}')
                     noise = torch.randn(shape,device=device)
                     self.val_noise = noise.cpu()
                 else:
@@ -263,29 +270,35 @@ class LatentDiffusion(pl.LightningModule):
                 image_or_shape = shape
                 
             if self.loss_type == "simple_consistency_distillation":
-                for sample_steps in [1,2,4,8]:
-                    latents = self.noise_scheduler.consistency_sample(image_or_shape=image_or_shape,
-                                                                      num_inference_step=sample_steps,
-                                                                      net = self.denoiser_wrapper, 
-                                                                      device="cuda")
-                    imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
-                    # imgs expected range [-1,1]
-                    name = f"generated_images_samples_inference={sample_steps}steps.png"
-                    output_file = os.path.join(output_dir,name)
-                    channels,h,w = self.image_shape
-                    save_image(imgs.view(bs,channels,h,w),output_file, nrow=3, normalize=True)
+                sampling_method="consistency"
+                latents = self.noise_scheduler.consistency_sample(image_or_shape=image_or_shape,
+                                                                    num_inference_step=num_inference_step,
+                                                                    net = self.denoiser_wrapper, 
+                                                                    device="cuda")
             elif self.loss_type == "flow_matching":
+                sampling_method="euler"
                 latents = self.noise_scheduler.euler_sample(image_or_shape=image_or_shape,
                                                         num_inference_step=num_inference_step, 
                                                         net=self.denoiser, 
                                                         device=device, 
                                                         simple_var=simple_var)
-                imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
-                # imgs expected range [-1,1]
-                name = f"generated_images_sample={i}_inference={num_inference_step}steps.png"
+            
+            # imgs expected range [-1,1]
+            imgs = self.AE_decode(latents.view((bs,*self.latent_shape))).detach().cpu()
+            
+            # save file 
+            if save_mode == 'batch':
+                name = f"method={sampling_method}_steps={num_inference_step}_samples={i}-{i+bs}_rank={global_rank}.png"
                 output_file = os.path.join(output_dir,name)
                 channels,h,w = self.image_shape
-                save_image(imgs.view(n_sample,channels,h,w),output_file, nrow=3, normalize=True)
+                save_image(imgs.view(bs,channels,h,w),output_file, nrow=3, normalize=True)
+            elif save_mode == 'single':
+                channels,h,w = self.image_shape
+                for j in range(bs):
+                    name = f"method={sampling_method}_steps={num_inference_step}_samples={i+j}_rank={global_rank}.png"
+                    output_file = os.path.join(output_dir,name)
+                    save_image(imgs[j].view(channels,h,w),output_file, normalize=True)
+        
         self.denoiser.train()
         
     def on_train_batch_end(self, outputs, batch, batch_idx):
@@ -308,7 +321,19 @@ class LatentDiffusion(pl.LightningModule):
         if (self.current_epoch + 1)  % self.sample_epoch_interval==0:
             output_dir = os.path.join(self.sample_output_dir, f'epoch={self.current_epoch+1:05}')
             self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)    
-
+    
+    def on_after_backward(self):
+        # 在反向传播之后计算梯度范数
+        if self.global_step % 100 != 0:
+            return
+        total_norm = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+        
+        self.log('grad_norm', total_norm, on_step=True, on_epoch=True, prog_bar=True)
     # after training , call imagetogif
     def on_fit_end(self):
         folder = self.sample_output_dir
@@ -323,6 +348,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Training script')
     ## epoch 200 with loss 0.02 is enough to generate on mnist 
     parser.add_argument('--expname', type=str, default=None ,help='expname of this experiment')
+    parser.add_argument('--ckpt', type=str, default=None ,help='ckpt_path')
     parser.add_argument('--train', action='store_true', help='Whether to run in training mode')
     parser.add_argument('--auto-resume', action='store_true', help='whether resume from trained checkpoint ')
     parser.add_argument("-b", "--base", nargs="*", metavar="configs/train.yaml", help="paths to base configs. Loaded from left-to-right. Parameters can be overwritten or added with command-line options of the form `--key value`.", default=list())
@@ -343,6 +369,7 @@ if __name__ == "__main__":
     
     expname = config.expname
     imsize = config.imsize
+    
     if args.train:
         data_module = instantiate_from_config(config.data)
         data_module.prepare_data()
@@ -353,6 +380,7 @@ if __name__ == "__main__":
         log_dir_path = logger.log_dir
         print(f"Log directory: {log_dir_path}")
         sample_output_dir = os.path.join(log_dir_path, "samples")
+        os.makedirs(sample_output_dir,exist_ok=True)
         model.sample_output_dir = sample_output_dir
         print("model sample output_dir is replaced to ", sample_output_dir)
         
@@ -380,12 +408,20 @@ if __name__ == "__main__":
             pretrain_path = None 
         trainer.fit(model,data_module,ckpt_path=pretrain_path)
     else:
-        ckpt_folder = f"./checkpoints/{expname}"
-        paths = os.listdir(ckpt_folder)
-        paths = [os.path.join(ckpt_folder,i) for i in paths]
-        paths = ["/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/linear_normal/model-epoch=1184-val_loss=0.00332.ckpt"]
-        for path in paths:
-            ckpt = os.path.basename(path).replace(".ckpt","")
+        if args.ckpt is not None: 
             model = instantiate_from_config(config.model)
-            model.load_state_dict(torch.load(path)['state_dict'],strict=True)
-            model.sample_images(f'./sample/{ckpt}',n_sample=32,device="cuda:0")
+            sample_dir = f'./samples/{args.expname}'
+            os.makedirs(sample_dir,exist_ok=True)
+            model.fix_val_noise = False 
+            model.load_state_dict(torch.load(args.ckpt,weights_only=False)['state_dict'],strict=True)
+            model.sample_images(sample_dir,n_sample=81,max_batch_size=9,device="cuda")
+        else:
+            ckpt_folder = f"./logs/{expname}"
+            paths = os.listdir(ckpt_folder)
+            paths = [os.path.join(ckpt_folder,i) for i in paths]
+            # paths = ["/home/haoyu/research/simplemodels/SimpleDiffusion/UnconditionalDiffusion/checkpoints/linear_normal/model-epoch=1184-val_loss=0.00332.ckpt"]
+            for path in paths:
+                ckpt = os.path.basename(path).replace(".ckpt","")
+                model = instantiate_from_config(config.model)
+                model.load_state_dict(torch.load(path,weights_only=False)['state_dict'],strict=True)
+                model.sample_images(f'./sample/{ckpt}',n_sample=32,device="cuda:0")
