@@ -9,6 +9,7 @@ Compare the result with papers.
 
 > we don’t understand what we can’t create. 
 
+2024.11.1 有点痛苦了，感觉一个proj变大了会越来越shit,我尽量refactor
 
 
 **Notice: This repo is under heavy development.**
