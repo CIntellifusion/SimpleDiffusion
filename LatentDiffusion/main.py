@@ -19,7 +19,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from util import instantiate_from_config
 from util import images2gif
 from util import get_obj_from_str
-
+import torch_fidelity
 torch.set_float32_matmul_precision('high')
 """ 
 an simple overview of the code structure
@@ -141,8 +141,6 @@ class LatentDiffusion(pl.LightningModule):
                 }
         }
 
-    
-    
     def AE_encode(self,x):
         # x = torch.concat(x)
         # print("AE_encode",x.shape)# [128, 1, 28, 28]
@@ -157,11 +155,13 @@ class LatentDiffusion(pl.LightningModule):
         images,class_label = batch
         # print(f"class label : {class_label}")
         return self.AE_encode(images)
+    
     def denoiser_wrapper(self,x_t,t):
         if self.inverse:
             return -self.denoiser(x_t,1-t)
         else:
             return self.denoiser(x_t,t)
+        
     def forward(self, batch):
         # unconditional generation , no class label
         latents = batch 
@@ -303,25 +303,34 @@ class LatentDiffusion(pl.LightningModule):
         self.denoiser.train()
         
     def on_train_batch_end(self, outputs, batch, batch_idx):
-        if self.global_step % self.sample_step_interval ==0:
+        inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
+        if self.global_step % self.sample_step_interval == 0:
             latents = self.get_input(batch) 
             # print(f"latents shape and max min : {latents.shape} {latents.max()} {latents.min()}")
             save_image(self.AE_decode(latents).detach().cpu(),os.path.join(self.sample_output_dir, f"ground_truth_step={self.global_step}.png"),nrow=4,normalize=True)
             print(f"train epoch {self.current_epoch} batch {batch_idx} finished , global step {self.global_step}")
             output_dir = os.path.join(self.sample_output_dir, f'global_step={self.global_step:05}')
             os.makedirs(output_dir, exist_ok=True)
-            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)
+            for num_inference_step in inference_steps:
+                self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
             
     def on_train_start(self):
         # create sample output dir 
-        output_dir = os.path.join(self.sample_output_dir, f'global_step=0')
+        inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
+        output_dir = os.path.join(self.sample_output_dir, f'global_step=00000')
         os.makedirs(output_dir, exist_ok=True)
-        self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)
-        
+        for num_inference_step in inference_steps:
+            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
+            
     def on_train_epoch_end(self):
-        if (self.current_epoch + 1)  % self.sample_epoch_interval==0:
+        inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
+        if (self.current_epoch + 1)  % self.sample_epoch_interval==0 and self.global_rank ==0:
             output_dir = os.path.join(self.sample_output_dir, f'epoch={self.current_epoch+1:05}')
-            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True)    
+            for num_inference_step in inference_steps:
+                self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
+             
+        # wait for all gpus
+        self.trainer.strategy.barrier()
     
     def on_after_backward(self):
         # 在反向传播之后计算梯度范数
@@ -335,15 +344,24 @@ class LatentDiffusion(pl.LightningModule):
         total_norm = total_norm ** 0.5
         
         self.log('grad_norm', total_norm, on_step=True, on_epoch=True, prog_bar=True)
+        
     # after training , call imagetogif
     def on_fit_end(self):
-        folder = self.sample_output_dir
-        savepath = os.path.join(folder, "generated_video.gif")
-        subfolders = sorted(os.listdir(self.sample_output_dir))
-        name = "generated_images.png"
-        image_files = sorted([os.path.join(folder,sf,name) for sf in subfolders])
-        images2gif(image_files,savepath)
-    
+        self.fix_val_noise=False # for val fid 
+        fid_eval_folder = os.path.join(self.sample_output_dir,"eval")
+        inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
+        for num_inference_step in inference_steps:
+            output_dir = os.path.join(fid_eval_folder, f'inference_step={num_inference_step}')
+            os.makedirs(output_dir, exist_ok=True)
+            self.sample_images(output_dir=output_dir,n_sample=5000,device="cuda",simple_var=True,max_batch_size=10,num_inference_step=num_inference_step)
+            
+            metrics_dict = torch_fidelity.calculate_metrics(
+                input1=output_dir,
+                input2="ground-truth-celeba",
+                fid=True
+            )
+            self.log(f"num_inference_step={num_inference_step} fid",metrics_dict['frechet_inception_distance'])
+            print(f"FID after training(num_inference_step={num_inference_step}): ",metrics_dict['frechet_inception_distance'])
 ###  parse args 
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script')
@@ -375,39 +393,59 @@ if __name__ == "__main__":
         data_module = instantiate_from_config(config.data)
         data_module.prepare_data()
         data_module.setup()
-        # TODO: auto resume
+        
         model = instantiate_from_config(config.model)
+        
+        # 从配置中获取训练器参数
+        trainer_config_dict = config.trainer.params
+        
+        # 创建 logger - 所有进程使用相同的 logger
         logger = pl.loggers.TensorBoardLogger("logs/", name=expname)
         log_dir_path = logger.log_dir
-        print(f"Log directory: {log_dir_path}")
-        sample_output_dir = os.path.join(log_dir_path, "samples")
-        os.makedirs(sample_output_dir,exist_ok=True)
-        model.sample_output_dir = sample_output_dir
-        print("model sample output_dir is replaced to ", sample_output_dir)
         
-        # 设置保存 checkpoint 的回调函数
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=os.path.join(log_dir_path,"checkpoints"),  # 保存 checkpoint 的目录
-            filename="model-{epoch:02d}-{val_loss:.5f}",  # checkpoint 文件名格式
-            monitor="val_loss",  # 监控的指标，这里使用验证集损失
-            mode="min",  # 指定监控模式为最小化验证集损失
-            save_top_k=30,  # 保存最好的 3 个 checkpoint
-            verbose=True
+        # 创建 Trainer 实例但不立即使用它
+        trainer = pl.Trainer(
+            **trainer_config_dict,
+            logger=logger,
+            callbacks=[],  # 暂时不添加回调，稍后添加
         )
         
-        trainer_config = config.trainer.params
+        # 现在我们可以使用 trainer 的属性来判断当前 rank
+        if trainer.global_rank == 0:
+            print(f"Log directory: {log_dir_path}")
+            sample_output_dir = os.path.join(log_dir_path, "samples")
+            os.makedirs(sample_output_dir, exist_ok=True)
+            
+            # 设置保存 checkpoint 的回调函数
+            checkpoint_callback = ModelCheckpoint(
+                dirpath=os.path.join(log_dir_path, "checkpoints"),
+                filename="model-{epoch:02d}-{val_loss:.5f}",
+                monitor="val_loss",
+                mode="min",
+                save_top_k=30,
+                verbose=True
+            )
+            print("model sample output_dir is replaced to ", sample_output_dir)
+        else:
+            sample_output_dir = os.path.join(log_dir_path, "samples")
+            checkpoint_callback = None
         
+        # 设置模型的 sample_output_dir
+        model.sample_output_dir = sample_output_dir
+        
+        # 重新创建 Trainer，这次包含正确的回调
         trainer = pl.Trainer(
-            **trainer_config,
+            **trainer_config_dict,
             logger=logger,
-            callbacks=[checkpoint_callback],  # 注册 checkpoint 回调函数
+            callbacks=[checkpoint_callback] if checkpoint_callback else [],
         )
         
         if config.pretrain_path != "None":
             pretrain_path = config.pretrain_path
         else:
             pretrain_path = None 
-        trainer.fit(model,data_module,ckpt_path=pretrain_path)
+        
+        trainer.fit(model, data_module, ckpt_path=pretrain_path)
     else:
         if args.ckpt is not None: 
             model = instantiate_from_config(config.model)
