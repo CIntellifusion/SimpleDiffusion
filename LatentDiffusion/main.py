@@ -363,17 +363,21 @@ class LatentDiffusion(pl.LightningModule):
             # TODO: sample on each device parallel to save time. 
             n_sample_per_device = n_sample // max(1, self.trainer.num_devices)
             self.sample_images(output_dir=output_dir,n_sample=n_sample_per_device,simple_var=True,max_batch_size=10,num_inference_step=num_inference_step,save_mode='single')
-            metrics_dict = torch_fidelity.calculate_metrics(
-                input1=output_dir,
-                input2="ground-truth-celeba",
-                fid=True
-            )
-            try:
-                self.log(f"fid/num_inference_step={num_inference_step}",metrics_dict['frechet_inception_distance'],sync_dist=True)
-            except:
-                print("logging in tensorboard FID failed")
-            # self.log(f"num_inference_step={num_inference_step} fid",metrics_dict['frechet_inception_distance'])
-            print(f"FID after training(num_inference_step={num_inference_step}): ",metrics_dict['frechet_inception_distance'])
+            if self.global_rank ==0:
+                metrics_dict = torch_fidelity.calculate_metrics(
+                    input1=output_dir,
+                    input2="ground-truth-celeba",
+                    fid=True
+                )
+                try:
+                    self.log(f"fid/num_inference_step={num_inference_step}",metrics_dict['frechet_inception_distance'],sync_dist=True)
+                except:
+                    print("logging in tensorboard FID failed")
+                output_fid_file = os.path.join(fid_eval_folder, f'fid_metric.txt')
+                with open(output_fid_file,'a') as f:
+                    f.write(f"epoch: {self.current_epoch} num_inference_step: {num_inference_step} FID: {metrics_dict['frechet_inception_distance']}\n")
+                # self.log(f"num_inference_step={num_inference_step} fid",metrics_dict['frechet_inception_distance'])
+                print(f"FID after training(num_inference_step={num_inference_step}): ",metrics_dict['frechet_inception_distance'])
         self.fix_val_noise = old_fix_val_noise
        
     def on_train_batch_end(self, outputs, batch, batch_idx):
