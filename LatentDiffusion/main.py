@@ -20,6 +20,7 @@ from util import instantiate_from_config
 from util import images2gif
 from util import get_obj_from_str
 import torch_fidelity
+from ema_pytorch import PostHocEMA,EMA
 torch.set_float32_matmul_precision('high')
 
 """ 
@@ -60,7 +61,8 @@ class LatentDiffusion(pl.LightningModule):
                  fix_val_noise=True,
                  timestep_inverse=False,
                  r_config = None,
-                 scheduler_eps= 0.0 
+                 scheduler_eps= 0.0 ,
+                 ema_params = {},
                  ):
         super(LatentDiffusion, self).__init__()
         self.save_hyperparameters()  # Save hyperparameters for logging
@@ -73,7 +75,6 @@ class LatentDiffusion(pl.LightningModule):
         self.vae_config = vae_config
         self.config_vae(vae_pretrained_path)
         
-        self.criterion = nn.MSELoss()
         self.optimizer_params = optimizer_params 
         self.lr_scheduler_config = lr_scheduler_config
         self.image_shape = image_shape
@@ -103,6 +104,16 @@ class LatentDiffusion(pl.LightningModule):
             assert self.r_config is not None
             self.scheduler_eps = scheduler_eps 
             
+            # create ema_model. FACM don't while Scm Formula use ema_model
+            self.ema_model =  EMA(
+                self.denoiser,
+                **ema_params,
+            )
+            # load ema state dict 
+            print(f"copying params from denoiser to ema model")
+            self.ema_model.copy_params_from_model_to_ema()
+            self.ema_model.eval()
+            # self.ema_model.requires_grad_(False)
             # self.create_scm_adaptive_weight_on_sigma()
         self.fix_val_noise = fix_val_noise
         self.val_noise = None
@@ -183,13 +194,14 @@ class LatentDiffusion(pl.LightningModule):
         loss_type = self.loss_type
         # print("loss type: ",loss_type)
         if loss_type == "flow_matching":
-            
+            # 1. linear interpolation 
+            # 2. trig flow
             bs = latents.shape[0]
-            t ,sigma = self.noise_scheduler.sample_t(bs, latents.device)
+            t , sigma  = self.noise_scheduler.sample_t(bs, latents.device)
             x_t,target = self.noise_scheduler.sample_forward(latents, t.reshape(bs,1,1,1))
             # print(f"t shape: {t.shape}, sigma shape: {sigma.shape} ")
             model_output = self.denoiser(x_t, sigma.reshape(bs,1))
-            loss = self.criterion(target,model_output)
+            loss = torch.nn.functional.mse_loss(target,model_output)
 
         elif "simple_consistency" in loss_type:
             bs = latents.shape[0]
@@ -209,7 +221,7 @@ class LatentDiffusion(pl.LightningModule):
                 
                 # Compute average velocity via JVP
                 v_sigma = torch.ones_like(sigma)
-                sigma_end = torch.ones_like(sigma)
+       
                 F_avg, F_avg_grad = torch.func.jvp(model_wrapper, (x_t, sigma), (ref_velocity, v_sigma))
                 F_avg_grad = F_avg_grad.detach()
                 F_avg_sg = F_avg.detach()
@@ -225,48 +237,96 @@ class LatentDiffusion(pl.LightningModule):
                 loss = cm_loss.mean()
                 
             elif self.loss_type == "simple_consistency_distillation":
-                t = torch.rand((bs,1),device = latents.device)
-                t = torch.clamp(t, self.scheduler_eps ,1.0 - self.scheduler_eps)
+                
+                # scm implementation 2 by haoyu 
+                # ref: scm paper algo 1
+                sigma = torch.rand((bs,1),device = latents.device)
+                sigma = torch.clamp(sigma, self.scheduler_eps ,1.0 - self.scheduler_eps)
+                t = sigma * torch.pi / 2  # t \in [0, pi/2]
                 # re-name
                 data = latents
-                sigma = t.reshape(bs,1,1,1)
+                sigma = sigma.reshape(bs,1,1,1)
                 # sample forward 
                 noise = torch.randn_like(data).to(data.device)
                 # print(f"noise size : {noise.shape}, data size: {data.shape} sigma size: {sigma.shape}")
                 x_t = sigma * data + (1-sigma)  * noise
-                target = data - noise
+                
+                # target = data - noise
                 assert hasattr(self,"ref_model")
                 
+                def ema_model_wrapper(x_t, t):
+                    torch.cuda.set_rng_state(cuda_state)
+                    output = self.ema_model(x_t, t)
+                    # print(f"ema model output shape {output.shape}")
+                    return output
+                
+                # ref_velocity = dxt/dt , given dataset variance = 1
                 with torch.no_grad():
                     cuda_state = torch.cuda.get_rng_state()
-                    if self.inverse:
-                        ref_velocity = -self.ref_model(x_t,1 - t)
-                    else:
-                        ref_velocity = self.ref_model(x_t, t)
-                        
-                # Compute average velocity via JVP
-                v_t = torch.ones_like(t)
-                sigma_end = torch.ones_like(sigma)
-                F_avg, F_avg_grad = torch.func.jvp(model_wrapper, (x_t, t), (ref_velocity, v_t))
+                    ref_velocity = self.ref_model(x_t, sigma.reshape(bs,1))
+                
+                # tagent warmup 
+                r_factor = min(self.r_config.r_factor_max, self.global_step / self.r_config.r_factor_warmup_steps)
+                
+                # g 
+                t = t.reshape(bs,-1,1,1)
+                cost = torch.cos(t)
+                sint = torch.sin(t) 
+
+                v_sigma = torch.ones_like(sigma).reshape(bs,1)
+                # sigma_end = torch.ones_like(sigma)
+
+                ema_output, F_avg_grad = torch.func.jvp(ema_model_wrapper, (x_t, sigma.reshape(bs,1)), (ref_velocity, v_sigma))
+                # print("num_items in ema_output",len(ema_output))
+                # import pdb; pdb.set_trace()
+                ema_output = ema_output.detach()
                 F_avg_grad = F_avg_grad.detach()
-                F_avg_sg = F_avg.detach()
-                # Compute average velocity target
-                r_factor = min(self.r_config.r_factor_max, self.global_step / self.r_config.r_factor_warmup_steps) 
-                v_bar = ref_velocity + (sigma_end - sigma) * F_avg_grad * r_factor
-                g = F_avg_sg - v_bar 
-                # Compute interpolated target with relaxation
-                alpha = torch.sin(sigma * np.pi / 2).reshape(bs,1,1,1) # 1-cosa**2 = sin**2 < sina < 1
-                target = F_avg_sg - alpha * g.clamp(min=-1, max=1)
-                # Weight CM loss by time
-                beta = torch.cos(sigma * np.pi / 2).flatten()
-                cm_loss = self.norm_l2_loss(F_avg, target) * beta
-                # cm_loss = self.adaptive_t_weight(sigma,cm_loss)
-                loss = cm_loss.mean()
+                model_output = self.denoiser(x_t, sigma.reshape(bs,1)) 
+                g = -cost* cost * (ema_output - ref_velocity) - r_factor * cost * sint * (F_avg_grad + x_t)
+                g = g.clamp(min=-1, max=1)
+                loss = torch.nn.functional.mse_loss(model_output, ema_output + g)
+                
+                
+                # t = torch.rand((bs,1),device = latents.device)
+                # t = torch.clamp(t, self.scheduler_eps ,1.0 - self.scheduler_eps)
+                # # re-name
+                # data = latents
+                # sigma = t.reshape(bs,1,1,1)
+                # # sample forward 
+                # noise = torch.randn_like(data).to(data.device)
+                # # print(f"noise size : {noise.shape}, data size: {data.shape} sigma size: {sigma.shape}")
+                # x_t = sigma * data + (1-sigma)  * noise
+                # target = data - noise
+                # assert hasattr(self,"ref_model")
+                
+                # with torch.no_grad():
+                #     cuda_state = torch.cuda.get_rng_state()
+                #     if self.inverse:
+                #         ref_velocity = -self.ref_model(x_t,1 - t)
+                #     else:
+                #         ref_velocity = self.ref_model(x_t, t)
+                        
+                # # Compute average velocity via JVP
+                # v_t = torch.ones_like(t)
+                # sigma_end = torch.ones_like(sigma)
+                # F_avg, F_avg_grad = torch.func.jvp(model_wrapper, (x_t, t), (ref_velocity, v_t))
+                # F_avg_grad = F_avg_grad.detach()
+                # F_avg_sg = F_avg.detach()
+                # # Compute average velocity target
+                # r_factor = min(self.r_config.r_factor_max, self.global_step / self.r_config.r_factor_warmup_steps) 
+                # v_bar = ref_velocity + (sigma_end - sigma) * F_avg_grad * r_factor
+                # g = F_avg_sg - v_bar 
+                # # Compute interpolated target with relaxation
+                # alpha = torch.sin(sigma * np.pi / 2).reshape(bs,1,1,1) # 1-cosa**2 = sin**2 < sina < 1
+                # target = F_avg_sg - alpha * g.clamp(min=-1, max=1)
+                # # Weight CM loss by time
+                # beta = torch.cos(sigma * np.pi / 2).flatten()
+                # cm_loss = self.norm_l2_loss(F_avg, target) * beta
+                # # cm_loss = self.adaptive_t_weight(sigma,cm_loss)
+                # loss = cm_loss.mean()
             else:
                 raise NotImplementedError(f"unknown simple consistency loss type {self.loss_type}")
            
-            
-
         return loss 
 
     def norm_l2_loss(self, pred, target, p=0.5, c=1e-2):
@@ -300,7 +360,6 @@ class LatentDiffusion(pl.LightningModule):
         os.makedirs(output_dir, exist_ok=True)
         self.denoiser.eval()
         global_rank = self.global_rank
-
         for i in trange(0, n_sample, max_batch_size, leave=False):
             # shape = (min(max_batch_size, n_sample - i),*self.image_shape)
             bs = min(max_batch_size, n_sample - i)
@@ -360,60 +419,68 @@ class LatentDiffusion(pl.LightningModule):
         for num_inference_step in inference_steps:
             output_dir = os.path.join(fid_eval_folder, f'inference_step={num_inference_step}')
             os.makedirs(output_dir, exist_ok=True)
-            # TODO: sample on each device parallel to save time. 
             n_sample_per_device = n_sample // max(1, self.trainer.num_devices)
-            self.sample_images(output_dir=output_dir,n_sample=n_sample_per_device,simple_var=True,max_batch_size=10,num_inference_step=num_inference_step,save_mode='single')
-            if self.global_rank ==0:
-                metrics_dict = torch_fidelity.calculate_metrics(
-                    input1=output_dir,
-                    input2="ground-truth-celeba",
-                    fid=True
-                )
-                try:
-                    self.log(f"fid/num_inference_step={num_inference_step}",metrics_dict['frechet_inception_distance'],sync_dist=True)
-                except:
-                    print("logging in tensorboard FID failed")
-                output_fid_file = os.path.join(fid_eval_folder, f'fid_metric.txt')
-                with open(output_fid_file,'a') as f:
-                    f.write(f"epoch: {self.current_epoch} num_inference_step: {num_inference_step} FID: {metrics_dict['frechet_inception_distance']}\n")
-                # self.log(f"num_inference_step={num_inference_step} fid",metrics_dict['frechet_inception_distance'])
-                print(f"FID after training(num_inference_step={num_inference_step}): ",metrics_dict['frechet_inception_distance'])
+            # print(f"sampling for FID evaluation with {n_sample_per_device} samples on device {device} with {num_inference_step} inference steps")
+            self.sample_images(output_dir=output_dir,n_sample=n_sample_per_device,device=self.device,simple_var=True,max_batch_size=10,num_inference_step=num_inference_step,save_mode='single')
+            # TODO: make sure other devices has finished sampling
+            # if self.global_rank == 0:
+            #     metrics_dict = torch_fidelity.calculate_metrics(
+            #         input1=output_dir,
+            #         input2="ground-truth-celeba",
+            #         fid=True
+            #     )
+            #     try:
+            #         self.log(f"fid/num_inference_step={num_inference_step}",metrics_dict['frechet_inception_distance'],sync_dist=True)
+            #     except:
+            #         print("logging in tensorboard FID failed")
+            #     output_fid_file = os.path.join(fid_eval_folder, f'fid_metric.txt')
+            #     with open(output_fid_file,'a') as f:
+            #         f.write(f"epoch: {self.current_epoch} num_inference_step: {num_inference_step} FID: {metrics_dict['frechet_inception_distance']}\n")
+            #     # self.log(f"num_inference_step={num_inference_step} fid",metrics_dict['frechet_inception_distance'])
+            #     print(f"FID after training(num_inference_step={num_inference_step}): ",metrics_dict['frechet_inception_distance'])
         self.fix_val_noise = old_fix_val_noise
-       
+        # print(f"rank {self.global_rank} finished FID evaluation")
+        # self.trainer.strategy.barrier()  # Synchronize all processes 
+        
     def on_train_batch_end(self, outputs, batch, batch_idx):
         inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
         if self.global_step % self.sample_step_interval == 0:
             latents = self.get_input(batch) 
             # print(f"latents shape and max min : {latents.shape} {latents.max()} {latents.min()}")
-            save_image(self.AE_decode(latents).detach().cpu(),os.path.join(self.sample_output_dir, f"ground_truth_step={self.global_step}.png"),nrow=4,normalize=True)
-            print(f"train epoch {self.current_epoch} batch {batch_idx} finished , global step {self.global_step}")
             visualize_training_data_dir = os.path.join(self.sample_output_dir, "training_data_visualization")
             os.makedirs(visualize_training_data_dir, exist_ok=True)
-            output_dir = os.path.join(visualize_training_data_dir, f'global_step={self.global_step:05}')
+            save_image(self.AE_decode(latents).detach().cpu(),os.path.join(visualize_training_data_dir, f"ground_truth_step={self.global_step}.png"),nrow=4,normalize=True)
+            print(f"train epoch {self.current_epoch} batch {batch_idx} finished , global step {self.global_step}")
+            output_dir = os.path.join(self.sample_output_dir, f'global_step={self.global_step:05}')
             os.makedirs(output_dir, exist_ok=True)
             for num_inference_step in inference_steps:
-                self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
+                self.sample_images(output_dir=output_dir,n_sample=9,device=self.device,simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
             
-    def on_train_start(self):
-        # create sample output dir 
-        inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
-        output_dir = os.path.join(self.sample_output_dir, f'global_step=00000')
-        os.makedirs(output_dir, exist_ok=True)
-        for num_inference_step in inference_steps:
-            self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
+    # def on_train_start(self):
+        # self.fid_evaluation()
+        # print(f"fid evaluation finished at training start in rank {self.global_rank}")
+        # # create sample output dir 
+        # inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
+        # output_dir = os.path.join(self.sample_output_dir, f'global_step=00000')
+        # os.makedirs(output_dir, exist_ok=True)
+        # for num_inference_step in inference_steps:
+        #     self.sample_images(output_dir=output_dir,n_sample=9,device=self.device,simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
             
     def on_train_epoch_end(self):
-        inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
         if (self.current_epoch + 1)  % self.sample_epoch_interval==0 :
             self.fid_evaluation()
         else:
+            inference_steps = [20,30,50] if self.loss_type == "flow_matching" else [1,2,4,8]
             output_dir = os.path.join(self.sample_output_dir, f'epoch={self.current_epoch+1:05}')
             for num_inference_step in inference_steps:
-                self.sample_images(output_dir=output_dir,n_sample=9,device="cuda",simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
+                self.sample_images(output_dir=output_dir,n_sample=9,device=self.device,simple_var=True,max_batch_size=9,num_inference_step=num_inference_step)
         
     
     def on_after_backward(self):
         # 在反向传播之后计算梯度范数
+        if "simple_consistency" in self.loss_type:
+            # print(f"debugging: update ema is called")
+            self.ema_model.update()
         if self.global_step % 100 != 0:
             return
         total_norm = 0.0
@@ -422,9 +489,9 @@ class LatentDiffusion(pl.LightningModule):
                 param_norm = p.grad.detach().data.norm(2)
                 total_norm += param_norm.item() ** 2
         total_norm = total_norm ** 0.5
-        
+
         self.log('grad_norm', total_norm, on_step=True, on_epoch=True, prog_bar=True)
- 
+            
     def on_fit_end(self):
         self.fid_evaluation()
         
@@ -466,19 +533,16 @@ if __name__ == "__main__":
         trainer_config_dict = config.trainer.params
         
         # 自定义版本号，例如使用时间戳
-        import time
-        version = time.strftime("%Y-%m-%d_%H-%M-%S")
-        log_dir = os.path.join("logs", expname, version)
+
         
-        # 创建 logger，指定版本
-        logger = pl.loggers.TensorBoardLogger("logs", name=expname, version=version)
-        # 此时 logger.log_dir 应该等于 log_dir
-        assert logger.log_dir == log_dir
         # 使用环境变量判断当前 rank
         global_rank = int(os.environ.get("RANK", 0))
         
         # 只在 rank 0 上创建目录和打印信息
         if global_rank == 0:
+            import time
+            version = time.strftime("%Y-%m-%d_%H-%M")
+            log_dir = os.path.join("logs", expname, version)
             print(f"Log directory: {log_dir}")
             sample_output_dir = os.path.join(log_dir, "samples")
             os.makedirs(sample_output_dir, exist_ok=True)
@@ -500,7 +564,7 @@ if __name__ == "__main__":
         
         trainer = pl.Trainer(
             **trainer_config_dict,
-            logger=logger,
+            logger=pl.loggers.TensorBoardLogger("logs", name=expname, version=version),
             callbacks=[checkpoint_callback],
         )
         

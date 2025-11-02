@@ -1,0 +1,63 @@
+expname: trigflow 
+imsize: 64
+pretrain_path:  # "logs/flowmatching/version_38/checkpoints/model-epoch=99.ckpt"
+
+trainer:
+  target: pytorch_lightning.Trainer
+  params:
+    max_epochs: 200 
+    accelerator: gpu
+    devices: auto
+    accumulate_grad_batches: 1
+    precision: bf16
+  
+model:
+  target: main.LatentDiffusion
+  params:
+    imsize: ${imsize}
+    channels: 3
+    optimizer_params:
+      lr: 1e-3
+      weight_decay: 0.0
+      beta: 0.95
+      eps: 1e-8
+
+    lr_scheduler_config: 
+      target: torch.optim.lr_scheduler.StepLR
+      params: 
+        step_size: 1000
+        gamma: 0.8 
+      
+    sample_output_dir: "./sample/celeb_config"
+    sample_epoch_interval: 20
+    sample_step_interval: 1000
+
+    noise_scheduler_config:
+      target: schedulers.flowmatching.TrigFlow
+    loss_type: "flow_matching"
+        
+    vae_config:
+      target: vae.VAELegacy
+
+    model_config:
+      target: models.dit.DiT
+      params:
+        imsize: ${imsize}
+        patch_size: 2 
+        in_channels: ${model.params.channels}
+        pos_emb_type: "learned1d"
+        hidden_size: 512
+        qk_norm: True
+        depth: 12
+        num_heads: 8
+        mlp_ratio: 4.0 
+        learn_sigma: False  
+        use_gradient_checkpointing: False 
+
+data:
+  target: data.data_wrapper.CelebDataModule
+  params:
+    data_dir: /pfs/haoyu/huggingface_cache/nielsr___celeb_a-faces
+    batch_size: 128
+    num_workers: 32
+    imsize : ${imsize}

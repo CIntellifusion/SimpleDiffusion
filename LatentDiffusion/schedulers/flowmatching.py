@@ -52,6 +52,69 @@ class FlowMatching(nn.Module):
             noise = torch.randn_like(x).to(x.device)
             x = sigma_next * pred_end + (1 - sigma_next) * noise 
         return pred_end
+
+class TrigFlow(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def sample_t(self, batch_size, device):
+        # sigma \in [0,1)
+        # timestep \in [0,pi/2)
+        sigma = torch.rand((batch_size,1),device = device) 
+        timestep = sigma * torch.pi / 2 
+        return  timestep, sigma
+    
+    def sample_forward(self,data , t):
+        # t \in [0,pi/2)
+        noise = torch.randn_like(data).to(data.device)
+        # Interpolation Process
+        xt = torch.cos(t) * data + torch.sin(t) * noise
+        # x0 = data 
+        # x_{pi/2} = noise 
+        # xt' = cos(t')*data + sin(t')* noise
+        # xt' - xt = (cos(t')-cos(t)) * data + (sin(t')-sin(t))*noise
+        # lim t' -> t [(cos(t')-cos(t)) / (t'-t) ] = -sin(t)
+        # lim t' -> t [(sin(t')-sin(t))] / (t'-t) ] = cos(t)
+        # (xt' - xt ) / (t'-t) =cos(t) * noise  - sin(t) * data  = target
+        # xt'= xt+ target * delta t
+        # eq.4 in scm paper 
+        # Construct Target Velocity
+        target = torch.cos(t) * noise - torch.sin(t) * data 
+        return xt , target 
+    
+    @torch.no_grad()
+    def euler_sample(self, image_or_shape,num_inference_step ,net,device="cuda",simple_var=True):
+        # simple_var for compatibility
+        if isinstance(image_or_shape,torch.Tensor):
+            x = image_or_shape.to(device)
+        else:
+            x = torch.randn(image_or_shape,device=device)
+        # sigma \in [0,pi/2)
+        t = torch.linspace(torch.pi / 2 ,0 ,num_inference_step+1,device=device) 
+        for t_cur,t_next in zip(t[:-1],t[1:]):
+            sigma_cur = t_cur.repeat(x.shape[0],1) * 2 / torch.pi 
+            pred_v = net(x, sigma_cur)
+            # print(f"x {x.shape} pred_v {pred_v.shape} sigma_cur {sigma_cur.shape} sigma_next {sigma_next.shape}")
+            delta_t = (t_next-t_cur).repeat(x.shape[0],1,1,1)
+            x_next = x + pred_v * delta_t
+            x = x_next
+        return x
+    
+    @torch.no_grad()
+    def consistency_sample(self, image_or_shape,num_inference_step ,net,device="cuda"):
+        # simple_var for compatibility
+        if isinstance(image_or_shape,torch.Tensor):
+            x = image_or_shape.to(device)
+        else:
+            x = torch.randn(image_or_shape,device=device)
+        sigmas = torch.linspace(0,1,num_inference_step+1,device=device).reshape(-1,1,1,1,1).repeat(1,x.shape[0],1,1,1)
+        sigma_end = sigmas[-1]
+        for i, (sigma, sigma_next) in enumerate(zip(sigmas[:-1], sigmas[1:])):
+            pred_v = net(x, sigma.reshape(x.shape[0],1))
+            pred_end = x + (sigma_end-sigma) * pred_v
+            noise = torch.randn_like(x).to(x.device)
+            x = sigma_next * pred_end + (1 - sigma_next) * noise 
+        return pred_end
     
 class DiscreteFlowMatching(nn.Module):
     def __init__(self,num_train_steps=1000):
