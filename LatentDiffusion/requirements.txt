@@ -6,3 +6,4 @@ datasets
 einops
 tensorboard
 torch-fidelity
+ema_pytorch

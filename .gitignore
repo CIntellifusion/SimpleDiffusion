@@ -5,3 +5,6 @@ logs
 checkpoints
 sample
 lightning_logs
+ground-truth-celeba
+post-hoc-ema-checkpoints
+

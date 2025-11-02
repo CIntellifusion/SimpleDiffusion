@@ -8,7 +8,9 @@ trainer:
     max_epochs: 200 
     accelerator: gpu
     devices: auto
-
+    accumulate_grad_batches: 1
+    precision: bf16
+  
 model:
   target: main.LatentDiffusion
   params:
@@ -23,7 +25,7 @@ model:
     lr_scheduler_config: 
       target: torch.optim.lr_scheduler.StepLR
       params: 
-        step_size: 10000 
+        step_size: 4000
         gamma: 0.8 
       
     sample_output_dir: "./sample/celeb_config"
@@ -37,18 +39,19 @@ model:
       target: vae.VAELegacy
 
     model_config:
-        target: models.dit.DiT
-        params:
-          imsize: ${imsize}
-          patch_size: 2 
-          in_channels: ${model.params.channels}
-          pos_emb_type: "learned1d"
-          hidden_size: 512
-          depth: 12
-          num_heads: 8
-          mlp_ratio: 4.0 
-          learn_sigma: False  
-          use_gradient_checkpointing: False 
+      target: models.dit.DiT
+      params:
+        imsize: ${imsize}
+        patch_size: 2 
+        in_channels: ${model.params.channels}
+        pos_emb_type: "learned1d"
+        hidden_size: 512
+        qk_norm: True
+        depth: 12
+        num_heads: 8
+        mlp_ratio: 4.0 
+        learn_sigma: False  
+        use_gradient_checkpointing: False 
     loss_type: "flow_matching"
 
 data:

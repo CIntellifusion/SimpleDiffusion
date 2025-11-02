@@ -57,7 +57,7 @@ model:
 data:
   target: data.data_wrapper.CelebDataModule
   params:
-    data_dir: /pfs/haoyu/huggingface_cache/nielsr___celeb_a-faces
+    data_dir: nielsr/CelebA-faces
     batch_size: 128
     num_workers: 32
     imsize : ${imsize}
