@@ -87,6 +87,7 @@ class LatentDiffusion(pl.LightningModule):
         if model_pretrained_path != '':
             self.load_state_dict(torch.load(model_pretrained_path,weights_only=False)['state_dict'],strict=True)
         
+        self.data_std = 0.5 
         if "simple_consistency" in self.loss_type:
             if self.loss_type == "simple_consistency_distillation":
                 print(f"creating reference model for consistency distillation")
@@ -105,14 +106,14 @@ class LatentDiffusion(pl.LightningModule):
             self.scheduler_eps = scheduler_eps 
             
             # create ema_model. FACM don't while Scm Formula use ema_model
-            self.ema_model =  EMA(
-                self.denoiser,
-                **ema_params,
-            )
+            # self.ema_model =  EMA(
+            #     self.denoiser,
+            #     **ema_params,
+            # )
             # load ema state dict 
-            print(f"copying params from denoiser to ema model")
-            self.ema_model.copy_params_from_model_to_ema()
-            self.ema_model.eval()
+            # print(f"copying params from denoiser to ema model")
+            # self.ema_model.copy_params_from_model_to_ema()
+            # self.ema_model.eval()
             # self.ema_model.requires_grad_(False)
             # self.create_scm_adaptive_weight_on_sigma()
         self.fix_val_noise = fix_val_noise
@@ -188,6 +189,7 @@ class LatentDiffusion(pl.LightningModule):
     def forward(self, batch):
         # unconditional generation , no class label
         latents = batch 
+        # print(f"latents mean={latents.mean()} std={latents.std()} max={latents.max()} min={latents.min()}")
         # latents range : [-1,1]
         # latents shape : B,C,H,W 
         # t range : [0,1]
@@ -200,7 +202,7 @@ class LatentDiffusion(pl.LightningModule):
             t , sigma  = self.noise_scheduler.sample_t(bs, latents.device)
             x_t,target = self.noise_scheduler.sample_forward(latents, t.reshape(bs,1,1,1))
             # print(f"t shape: {t.shape}, sigma shape: {sigma.shape} ")
-            model_output = self.denoiser(x_t, sigma.reshape(bs,1))
+            model_output = self.data_std * self.denoiser(x_t / self.data_std , sigma.reshape(bs,1))
             loss = torch.nn.functional.mse_loss(target,model_output)
 
         elif "simple_consistency" in loss_type:
@@ -237,34 +239,28 @@ class LatentDiffusion(pl.LightningModule):
                 loss = cm_loss.mean()
                 
             elif self.loss_type == "simple_consistency_distillation":
-                
                 # scm implementation 2 by haoyu 
                 # ref: scm paper algo 1
                 sigma = torch.rand((bs,1),device = latents.device)
                 sigma = torch.clamp(sigma, self.scheduler_eps ,1.0 - self.scheduler_eps)
                 t = sigma * torch.pi / 2  # t \in [0, pi/2]
+                t = t.reshape(bs,1,1,1)
                 # re-name
                 data = latents
                 sigma = sigma.reshape(bs,1,1,1)
                 # sample forward 
-                noise = torch.randn_like(data).to(data.device)
+                noise = torch.randn_like(data).to(data.device) * self.data_std
                 # print(f"noise size : {noise.shape}, data size: {data.shape} sigma size: {sigma.shape}")
                 x_t = sigma * data + (1-sigma)  * noise
                 
                 # target = data - noise
                 assert hasattr(self,"ref_model")
                 
-                def ema_model_wrapper(x_t, t):
-                    torch.cuda.set_rng_state(cuda_state)
-                    output = self.ema_model(x_t, t)
-                    # print(f"ema model output shape {output.shape}")
-                    return output
-                
                 # ref_velocity = dxt/dt , given dataset variance = 1
                 with torch.no_grad():
                     cuda_state = torch.cuda.get_rng_state()
-                    ref_velocity = self.ref_model(x_t, sigma.reshape(bs,1))
-                
+                    ref_velocity = self.ref_model(x_t/self.data_std, sigma.reshape(bs,1))
+                    dxdt = 
                 # tagent warmup 
                 r_factor = min(self.r_config.r_factor_max, self.global_step / self.r_config.r_factor_warmup_steps)
                 
@@ -273,18 +269,22 @@ class LatentDiffusion(pl.LightningModule):
                 cost = torch.cos(t)
                 sint = torch.sin(t) 
 
+                # v_sigma = (cost * sint ).reshape(bs,1)
                 v_sigma = torch.ones_like(sigma).reshape(bs,1)
                 # sigma_end = torch.ones_like(sigma)
-
-                ema_output, F_avg_grad = torch.func.jvp(ema_model_wrapper, (x_t, sigma.reshape(bs,1)), (ref_velocity, v_sigma))
+                with torch.no_grad():
+                    F_theta, F_theta_grad = torch.func.jvp(model_wrapper, (x_t, sigma.reshape(bs,1)), (ref_velocity, v_sigma))
                 # print("num_items in ema_output",len(ema_output))
                 # import pdb; pdb.set_trace()
-                ema_output = ema_output.detach()
-                F_avg_grad = F_avg_grad.detach()
+                F_theta_minus = F_theta.detach()
+                F_theta_grad = F_theta_grad.detach()
                 model_output = self.denoiser(x_t, sigma.reshape(bs,1)) 
-                g = -cost* cost * (ema_output - ref_velocity) - r_factor * cost * sint * (F_avg_grad + x_t)
-                g = g.clamp(min=-1, max=1)
-                loss = torch.nn.functional.mse_loss(model_output, ema_output + g)
+                g = - cost * cost * (F_theta_minus - ref_velocity) -\
+                    r_factor * cost * sint * (F_theta_grad + x_t)
+                # g = g.clamp(min=-1, max=1)
+                g_norm = torch.linalg.vector_norm(g, dim=(1, 2, 3), keepdim=True)
+                g = g / (g_norm + 0.1)  # 0.1 is the constant c, can be modified but 0.1 was used in the paper
+                loss = torch.nn.functional.mse_loss(model_output, F_theta_minus + g)
                 
                 
                 # t = torch.rand((bs,1),device = latents.device)
@@ -478,9 +478,9 @@ class LatentDiffusion(pl.LightningModule):
     
     def on_after_backward(self):
         # 在反向传播之后计算梯度范数
-        if "simple_consistency" in self.loss_type:
-            # print(f"debugging: update ema is called")
-            self.ema_model.update()
+        # if "simple_consistency" in self.loss_type:
+        #     # print(f"debugging: update ema is called")
+        #     self.ema_model.update()
         if self.global_step % 100 != 0:
             return
         total_norm = 0.0

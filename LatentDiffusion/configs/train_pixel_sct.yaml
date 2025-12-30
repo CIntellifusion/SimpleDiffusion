@@ -1,41 +1,41 @@
-expname: trigflow 
+expname: simple_consistency_training_trigflow
 imsize: 64
-pretrain_path:  # "logs/flowmatching/version_38/checkpoints/model-epoch=99.ckpt"
-
+pretrain_path : # "logs/flowmatching-celeba-1028/version_1/checkpoints/model-epoch=199-val_loss=0.10195.ckpt"
 trainer:
   target: pytorch_lightning.Trainer
   params:
-    max_epochs: 200 
+    max_epochs: 25
     accelerator: gpu
     devices: auto
     accumulate_grad_batches: 1
-    precision: bf16
-  
+
 model:
   target: main.LatentDiffusion
   params:
-    imsize: ${imsize}
+    imsize: 64
     channels: 3
     optimizer_params:
-      lr: 1e-3
+      lr: 1e-4
       weight_decay: 0.0
-      beta: 0.99
+      beta: 0.95
       eps: 1e-8
 
     lr_scheduler_config: 
       target: torch.optim.lr_scheduler.StepLR
       params: 
-        step_size: 2000
-        gamma: 0.9
-      
+        step_size: 1000
+        gamma: 0.8 
+
     sample_output_dir: "./sample/celeb_config"
-    sample_epoch_interval: 20
+    sample_epoch_interval: 1
     sample_step_interval: 1000
 
+    # noise_scheduler_config:
+    #   target: schedulers.flowmatching.FlowMatching
+ 
     noise_scheduler_config:
       target: schedulers.flowmatching.TrigFlow
-    loss_type: "flow_matching"
-        
+      
     vae_config:
       target: vae.VAELegacy
 
@@ -54,10 +54,16 @@ model:
         learn_sigma: False  
         use_gradient_checkpointing: False 
 
+    loss_type: "simple_consistency_training"
+
+    r_config: 
+      r_factor_max: 1.0
+      r_factor_warmup_steps: 10000 
+      
 data:
   target: data.data_wrapper.CelebDataModule
   params:
-    data_dir: /pfs/haoyu/huggingface_cache/nielsr___celeb_a-faces
-    batch_size: 128
-    num_workers: 32
+    data_dir: nielsr/CelebA-faces
+    batch_size: 32
+    num_workers: 16
     imsize : ${imsize}

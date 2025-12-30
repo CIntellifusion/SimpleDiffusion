@@ -54,9 +54,9 @@ class FlowMatching(nn.Module):
         return pred_end
 
 class TrigFlow(nn.Module):
-    def __init__(self):
+    def __init__(self,data_std=0.5):
         super().__init__()
-    
+        self.data_std = data_std
     def sample_t(self, batch_size, device):
         # sigma \in [0,1)
         # timestep \in [0,pi/2)
@@ -66,7 +66,7 @@ class TrigFlow(nn.Module):
     
     def sample_forward(self,data , t):
         # t \in [0,pi/2)
-        noise = torch.randn_like(data).to(data.device)
+        noise = torch.randn_like(data).to(data.device) * self.data_std
         # Interpolation Process
         xt = torch.cos(t) * data + torch.sin(t) * noise
         # x0 = data 
@@ -88,12 +88,12 @@ class TrigFlow(nn.Module):
         if isinstance(image_or_shape,torch.Tensor):
             x = image_or_shape.to(device)
         else:
-            x = torch.randn(image_or_shape,device=device)
+            x = torch.randn(image_or_shape,device=device) * self.data_std
         # sigma \in [0,pi/2)
         t = torch.linspace(torch.pi / 2 ,0 ,num_inference_step+1,device=device) 
         for t_cur,t_next in zip(t[:-1],t[1:]):
             sigma_cur = t_cur.repeat(x.shape[0],1) * 2 / torch.pi 
-            pred_v = net(x, sigma_cur)
+            pred_v = self.data_std * net(x / self.data_std, sigma_cur)
             # print(f"x {x.shape} pred_v {pred_v.shape} sigma_cur {sigma_cur.shape} sigma_next {sigma_next.shape}")
             delta_t = (t_next-t_cur).repeat(x.shape[0],1,1,1)
             x_next = x + pred_v * delta_t

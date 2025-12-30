@@ -5,13 +5,60 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from typing import Optional
 from timm.models.vision_transformer import PatchEmbed
+
 def modulate(x, shift, scale):
     return x * (1+scale) + shift
 
+
+class RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, scale_factor=1.0, eps: float = 1e-6):
+        """
+        Initialize the RMSNorm normalization layer.
+
+        Args:
+            dim (int): The dimension of the input tensor.
+            eps (float, optional): A small value added to the denominator for numerical stability. Default is 1e-6.
+
+        Attributes:
+            eps (float): A small value added to the denominator for numerical stability.
+            weight (nn.Parameter): Learnable scaling parameter.
+
+        """
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim) * scale_factor)
+
+    def _norm(self, x):
+        """
+        Apply the RMSNorm normalization to the input tensor.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The normalized tensor.
+
+        """
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        """
+        Forward pass through the RMSNorm layer.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The output tensor after applying RMSNorm.
+
+        """
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+    
 class Attention(nn.Module):
     def __init__(self,dim,num_heads,
                  qkv_bias=False,qk_norm=False,
-                 attn_drop=0.0,proj_drop=0.0,norm_layer=nn.LayerNorm,
+                 attn_drop=0.0,proj_drop=0.0,
                  rope=None,fused_attn=False):
         super().__init__()
         assert dim % num_heads == 0, "Dimension must be divisible by number of heads."
@@ -22,8 +69,11 @@ class Attention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.qk_norm = qk_norm
         if qk_norm:
-            self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
-            self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+            self.q_norm = RMSNorm(self.head_dim, scale_factor=1.0, eps=1e-6)
+            self.k_norm = RMSNorm(self.head_dim, scale_factor=1.0, eps=1e-6)
+        else:
+            self.q_norm = nn.Identity()
+            self.k_norm = nn.Identity()
         self.rope = rope
         if rope is not None:
             assert rope.dim == self.head_dim, "RoPE dimension must match head dimension"
@@ -94,7 +144,7 @@ class DiTBlock(nn.Module):
     """
     A DiT transformer block with adaptive lary norm zero conditioning. 
     """
-    def __init__(self, hidden_size,num_heads, mlp_ratio=None, rope=None,
+    def __init__(self, hidden_size,num_heads, mlp_ratio=None, rope=None,qk_norm=False,
                  **block_kwargs
                  ):
         super().__init__()
@@ -103,7 +153,7 @@ class DiTBlock(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.rope = rope
         self.norm1 = AdaLayerNormZero(hidden_size)
-        self.attn = Attention(dim=hidden_size, num_heads=num_heads)
+        self.attn = Attention(dim=hidden_size, num_heads=num_heads,qk_norm=qk_norm)
         self.use_mlp = mlp_ratio is not None 
         self.ff = FeedForward(dim=hidden_size, hidden_dim=int(hidden_size*mlp_ratio))
 
@@ -228,7 +278,23 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-
+class scm_AdaLoss(nn.Module):
+    def __init__(self, in_channels=256):
+        super().__init__()
+        self.logvar = nn.Sequential(
+            TimestepEmbedder(in_channels),
+            nn.Linear(in_channels, 1)
+        )
+    
+        self.init_weight()
+        
+    def forward(self, t, loss):
+        b = t.shape[0]
+        logvar = self.logvar(t.flatten()).view(b, -1, 1, 1)
+        print(f"factor {1/torch.exp(logvar)} logvar {logvar}")
+        weighted = (1/torch.exp(logvar)) * loss + logvar
+        return weighted
+    
 class DiT(nn.Module):
     def __init__(self, 
                  in_channels: int=3,
@@ -240,6 +306,7 @@ class DiT(nn.Module):
                  num_heads: int=8,
                  mlp_ratio: float=4.0,
                  learn_sigma : bool = True,
+                 qk_norm: bool = False,
                  use_gradient_checkpointing : bool = False):
         super().__init__()
         self.in_channels = in_channels
@@ -260,7 +327,7 @@ class DiT(nn.Module):
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size=hidden_size,num_heads=num_heads,mlp_ratio=mlp_ratio,rope=None)
+            DiTBlock(hidden_size=hidden_size,num_heads=num_heads,mlp_ratio=mlp_ratio,rope=None,qk_norm=qk_norm)
             for _ in range(depth)
         ])
         self.final_layer = DiTFinalLayer(hidden_size=hidden_size,out_channels=self.out_channels*patch_size*patch_size)

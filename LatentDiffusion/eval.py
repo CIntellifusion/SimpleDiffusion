@@ -34,7 +34,7 @@ def create_ground_truth_images(data_module,gt_dir):
                 return
 
 #python eval.py -b configs/train_pixel_fm.yaml --ckpt checkpoints/fm_celeba_200epoch.ckpt -o samples/eval_fm_200epoch -gt ground-truth-celeba
-#python eval.py -b configs/train_pixel_scm.yaml --ckpt /pfs/haoyu/research/SimpleDiffusion/LatentDiffusion/logs/FixScmCollapse_1e-5_rmax0.3/version_0/checkpoints/model-epoch=04-val_loss=0.03708.ckpt -o samples/eval_scm_5epoch -gt ground-truth-celeba
+#python eval.py -b configs/train_pixel_scm.yaml --ckpt logs/FixScmCollapse_1e-5_rmax0.3/version_0/checkpoints/model-epoch=04-val_loss=0.03708.ckpt -o samples/eval_scm_5epoch -gt ground-truth-celeba
 if __name__ == "__main__":
     args= parse_args()
     configs = [OmegaConf.load(cfg) for cfg in args.base]

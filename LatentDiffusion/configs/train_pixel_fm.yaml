@@ -19,21 +19,22 @@ model:
     optimizer_params:
       lr: 1e-3
       weight_decay: 0.0
-      beta: 0.95
+      beta: 0.99
       eps: 1e-8
 
     lr_scheduler_config: 
       target: torch.optim.lr_scheduler.StepLR
       params: 
-        step_size: 4000
-        gamma: 0.8 
-      
+        step_size: 2000
+        gamma: 0.9
+
     sample_output_dir: "./sample/celeb_config"
-    sample_epoch_interval: 1
+    sample_epoch_interval: 20
     sample_step_interval: 1000
 
     noise_scheduler_config:
       target: schedulers.flowmatching.FlowMatching
+    loss_type: "flow_matching"
         
     vae_config:
       target: vae.VAELegacy
@@ -52,12 +53,11 @@ model:
         mlp_ratio: 4.0 
         learn_sigma: False  
         use_gradient_checkpointing: False 
-    loss_type: "flow_matching"
 
 data:
   target: data.data_wrapper.CelebDataModule
   params:
-    data_dir: nielsr/CelebA-faces
+    data_dir: /pfs/haoyu/huggingface_cache/nielsr___celeb_a-faces
     batch_size: 128
     num_workers: 32
     imsize : ${imsize}

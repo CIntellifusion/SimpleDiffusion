@@ -22,10 +22,12 @@ Existing issue may include:
 2. Use ema_model. 
 
 ### EMA model 
+
 Follow the original formula in sCM we need a EMA model to ensure stablize training. 
 Here we use a naive EMA instead of PostHocEMA(that was created but not used in FACM).
 Using a EMA model in JVP significantly reduces the training memory, from 121GiB to 37GiB while all other setting remains the same. The reason is still unknown.  The training loss and grad norm also smaller and more stable. But the training speed decreases from 2.8 it/sec to 2.3 it/sec. 
 
+Update: EMA model is not need in sCM; F_theta_minus is ema_model in CM not in sCM. 
 ## sCM hyperparameter 
 
 1. we adjust r_factor_max from 1 to 0.5 to slow down training collapse time. 
@@ -41,13 +43,15 @@ Using a EMA model in JVP significantly reduces the training memory, from 121GiB 
 
 ### test training parameters 
 
-- [ ] 200 epoch for pretrain on celeba 
+- [x] 200 epoch for pretrain on celeba 
+- [x] 200 epoch for trigflow 
 - [ ] triaining with facm implementation and haoyu's implementation. training with and without ema_model. 
 
 
 ### FID 
 FM: Frechet Inception Distance: 9.877043774564868
 SCM(FACM implementation): reaches 11-12 or so on 1-step training. 
+TrigFlow 200 epoch NFE=50 n_sample=5000: 
 
 # Code Issues 
 

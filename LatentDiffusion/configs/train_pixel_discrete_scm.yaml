@@ -4,7 +4,7 @@ pretrain_path :
 trainer:
   target: pytorch_lightning.Trainer
   params:
-    max_epochs: 10
+    max_epochs: 5
     accelerator: gpu
     devices: 4
 
